@@ -7,6 +7,19 @@ import { Stars } from "@react-three/drei";
 // Memoize the deep background to prevent Next.js from destroying
 // the GPU context on Layout shift re-renders.
 export const Ambient3DBackground = React.memo(function Ambient3DBackground() {
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return (
+      <div className="fixed inset-0 z-[-1] bg-black">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-cyan-900/30 via-black to-black" />
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-[-1] bg-black">
       {/* Deep Radial Glow */}
@@ -39,3 +52,5 @@ export const Ambient3DBackground = React.memo(function Ambient3DBackground() {
     </div>
   );
 });
+
+export default Ambient3DBackground;

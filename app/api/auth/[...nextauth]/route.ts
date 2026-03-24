@@ -29,15 +29,19 @@ export const authOptions: NextAuthOptions = {
         let user = await User.findOne({ email: String(credentials.email) });
 
         if (!user) {
+          // If the mock email contains 'teacher', assign teacher role, otherwise admin/student
+          const assignRole = credentials.email.includes("teacher") ? "teacher" : 
+                            (credentials.email.includes("admin") ? "admin" : "student");
+          
           user = await User.create({
-            name: "Mock Admin",
+            name: `Mock ${assignRole.charAt(0).toUpperCase() + assignRole.slice(1)}`,
             email: credentials.email,
-            role: "admin"
+            role: assignRole
           });
-        } else if (user.role !== "admin") {
-          user.role = "admin";
-          await user.save();
         }
+        
+        // We removed the forced 'admin' overwrite so you can test specific roles
+        // using your exact database credentials.
         return { id: user._id.toString(), email: user.email, name: user.name, role: user.role } as any;
       }
     }),
@@ -80,6 +84,24 @@ export const authOptions: NextAuthOptions = {
         return true;
       }
       return false;
+    },
+    async jwt({ token, user }) {
+      // If a user object exists (e.g. immediately after login), persist its role and id to the token
+      if (user) {
+        token.role = (user as any).role;
+        token.id = user.id;
+      }
+      
+      // If no user object is provided by NextAuth on subsequent requests, fetch it from DB just to be safe
+      if (!token.role && token.email) {
+        await dbConnect();
+        const dbUser = await User.findOne({ email: String(token.email) });
+        if (dbUser) {
+           token.role = dbUser.role;
+           token.id = dbUser._id.toString();
+        }
+      }
+      return token;
     },
     async session({ session, token }) {
       if (session?.user?.email) {

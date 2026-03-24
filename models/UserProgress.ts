@@ -6,7 +6,7 @@ export interface IUserProgress extends Document {
   progress: number;
   completedTopics: mongoose.Types.ObjectId[];
   assessmentAttempts: { assessmentId: mongoose.Types.ObjectId; score: number; timestamp: Date }[];
-  weakAreas: string[];
+  weakAreas: mongoose.Types.ObjectId[];
   assignmentSubmissions: {
     assignmentId: mongoose.Types.ObjectId;
     status: "pending" | "graded" | "returned";
@@ -28,7 +28,7 @@ const UserProgressSchema: Schema = new Schema(
       score: Number,
       timestamp: { type: Date, default: Date.now }
     }],
-    weakAreas: [{ type: String }],
+    weakAreas: [{ type: Schema.Types.ObjectId, ref: 'Topic' }],
     assignmentSubmissions: [
       {
         assignmentId: { type: Schema.Types.ObjectId, ref: "Assignment" },

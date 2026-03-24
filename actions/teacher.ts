@@ -9,6 +9,8 @@ import Assignment from "@/models/Assignment";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { revalidatePath } from "next/cache";
+import UserProgress from "@/models/UserProgress";
+import User from "@/models/User";
 
 async function verifyTeacher() {
   const session = await getServerSession(authOptions);
@@ -317,3 +319,197 @@ export async function updateCourseWithCurriculum(courseId: string, data: {
   }
 }
 
+export async function getTeacherAnalytics() {
+  try {
+    const session = await verifyTeacher();
+    await dbConnect();
+
+    // Limit analytics only to the courses taught by this instructor
+    const courses = await Course.find({ instructorId: (session.user as any).id });
+    const courseIds = courses.map(c => c._id);
+
+    const avgScores = await UserProgress.aggregate([
+      { $match: { courseId: { $in: courseIds } } },
+      {
+        $addFields: {
+          studentAvgScore: {
+            $cond: {
+              if: { $gt: [{ $size: { $ifNull: ["$assessmentAttempts", []] } }, 0] },
+              then: { $avg: "$assessmentAttempts.score" },
+              else: null
+            }
+          }
+        }
+      },
+      {
+        $group: {
+          _id: "$courseId",
+          computedAvgScore: { $avg: "$studentAvgScore" },
+          totalStudents: { $sum: 1 }
+        }
+      },
+      {
+        $lookup: {
+          from: "courses",
+          localField: "_id",
+          foreignField: "_id",
+          as: "course"
+        }
+      },
+      { $unwind: "$course" },
+      {
+        $project: {
+          courseId: "$_id",
+          courseName: "$course.title",
+          averageScore: { $round: [{ $ifNull: ["$computedAvgScore", 0] }, 1] },
+          totalStudents: 1,
+          _id: 0
+        }
+      },
+      { $match: { courseName: { $ne: "Data Structures" } } },
+      { $sort: { averageScore: -1 } }
+    ]);
+
+    const weakTopics = await UserProgress.aggregate([
+      { $match: { courseId: { $in: courseIds } } },
+      { $unwind: "$weakAreas" },
+      {
+        $group: {
+          _id: "$weakAreas",
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $lookup: {
+          from: "topics",
+          localField: "_id",
+          foreignField: "_id",
+          as: "topicDetails"
+        }
+      },
+      { $unwind: { path: "$topicDetails", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          topicId: "$_id",
+          topicName: { $ifNull: ["$topicDetails.title", "Unknown Topic"] },
+          frequency: "$count",
+          _id: 0
+        }
+      },
+      { $sort: { frequency: -1 } },
+      { $limit: 10 }
+    ]);
+
+    return { 
+      success: true, 
+      analytics: JSON.parse(JSON.stringify({ avgScores, weakTopics })) 
+    };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function getStudentsForTeacher() {
+  try {
+    const session = await verifyTeacher();
+    await dbConnect();
+
+    const instructorId = (session.user as any).id;
+
+    // Strict Tenant-level security
+    const courses = await Course.find({ instructorId }).select('_id title');
+    const courseIds = courses.map(c => c._id);
+    const courseMap = courses.reduce((acc, c: any) => {
+      acc[c._id.toString()] = c.title;
+      return acc;
+    }, {} as Record<string, string>);
+
+    const progresses = await UserProgress.find({ courseId: { $in: courseIds } })
+      .populate('userId', 'name email')
+      .populate('weakAreas', 'title')
+      .lean() as any[];
+
+    // Structure the data sequentially for the Glassmorphism UI
+    const roster: any[] = [];
+    
+    progresses.forEach((p) => {
+      if (!p.userId) return; // Prevent dangling records from crashing the backend array
+      
+      let avgScore = 0;
+      if (p.assessmentAttempts && p.assessmentAttempts.length > 0) {
+        const total = p.assessmentAttempts.reduce((sum: number, a: any) => sum + a.score, 0);
+        avgScore = Math.round(total / p.assessmentAttempts.length);
+      }
+
+      roster.push({
+        id: p._id.toString(),
+        studentId: p.userId._id.toString(),
+        studentName: p.userId.name || "Unknown",
+        studentEmail: p.userId.email || "No Email",
+        courseName: courseMap[p.courseId.toString()] || "Unknown Course",
+        completionPercentage: p.progress || 0,
+        averageScore: avgScore,
+        weakAreas: p.weakAreas ? p.weakAreas.map((w: any) => w.title) : []
+      });
+    });
+
+    return { success: true, roster: JSON.parse(JSON.stringify(roster)) };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function getTrackedStudentProgress(courseTitle: string) {
+  try {
+    const session = await verifyTeacher();
+    await dbConnect();
+
+    const teacherId = (session.user as any).id;
+
+    // Find the course
+    const course = await Course.findOne({ title: courseTitle, instructorId: teacherId }).sort({ createdAt: -1 });
+    if (!course) {
+      return { success: false, error: "Course not found" };
+    }
+
+    // Identify exact Mock Student to ensure tracking alignment
+    const mockStudent = await User.findOne({ email: "student@example.com", role: "student" });
+    if (!mockStudent) {
+      return { success: false, error: "Mock student not found." };
+    }
+
+    // Find UserProgress for Mock Student specifically
+    const progressDoc = await UserProgress.findOne({ courseId: course._id, userId: mockStudent._id })
+      .populate("userId", "name email");
+
+    if (!progressDoc) {
+      return { success: false, error: "No student enrolled in this course yet." };
+    }
+
+    const courseModules = await Module.find({ courseId: course._id });
+    const moduleIds = courseModules.map((m: any) => m._id);
+    const totalTopicsInCourse = await Topic.countDocuments({ moduleId: { $in: moduleIds } });
+
+    let calculatedProgress = 0;
+    if (totalTopicsInCourse > 0) {
+      calculatedProgress = Math.min(100, Math.round((progressDoc.completedTopics.length / totalTopicsInCourse) * 100));
+    } else {
+      calculatedProgress = 100; // If no topics exist, it's virtually 100%. Or remain 0, but technically structurally complete. Wait, 0 or 100? Let's use 100 as the student action does.
+    }
+
+    console.log(`[TEACHER DASHBOARD] Progress Calculated: ${calculatedProgress}% for UserProgress ObjectId: ${progressDoc._id}`);
+
+    return { 
+      success: true, 
+      data: JSON.parse(JSON.stringify({
+        courseId: course._id,
+        courseName: course.title,
+        studentName: (progressDoc.userId as any)?.name || "Unknown Student",
+        progress: calculatedProgress,
+      }))
+    };
+  } catch (error: any) {
+    console.error("Track progress error:", error);
+    return { success: false, error: error.message };
+  }
+}

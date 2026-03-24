@@ -94,6 +94,25 @@ export async function startCourse(courseId: string) {
       });
     }
 
+    const courseModules = await Module.find({ courseId });
+    const moduleIds = courseModules.map((m: any) => m._id);
+    const totalTopicsInCourse = await Topic.countDocuments({ moduleId: { $in: moduleIds } });
+
+    let calculatedProgress = 0;
+    if (totalTopicsInCourse > 0) {
+      calculatedProgress = Math.min(100, Math.round((progress.completedTopics.length / totalTopicsInCourse) * 100));
+    } else {
+      calculatedProgress = 100;
+    }
+
+    // Force sync the DB document if fundamentally desync'd
+    if (progress.progress !== calculatedProgress) {
+        progress.progress = calculatedProgress;
+        await progress.save();
+    }
+
+    console.log(`[STUDENT DASHBOARD] Progress Calculated: ${calculatedProgress}% for UserProgress ObjectId: ${progress._id}`);
+
     return { success: true, progress: JSON.parse(JSON.stringify(progress)) };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -117,9 +136,13 @@ export async function markTopicComplete(courseId: string, topicId: string, total
     // Add to completed
     progressDoc.completedTopics.push(new mongoose.Types.ObjectId(topicId));
     
-    // Recalculate generic percent
-    if (totalTopicsInCourse > 0) {
-      progressDoc.progress = Math.min(100, Math.round((progressDoc.completedTopics.length / totalTopicsInCourse) * 100));
+    const courseModules = await Module.find({ courseId });
+    const moduleIds = courseModules.map((m: any) => m._id);
+    const dynamicTotal = await Topic.countDocuments({ moduleId: { $in: moduleIds } });
+
+    // Recalculate generic percent securely
+    if (dynamicTotal > 0) {
+      progressDoc.progress = Math.min(100, Math.round((progressDoc.completedTopics.length / dynamicTotal) * 100));
     } else {
       progressDoc.progress = 100;
     }
@@ -153,8 +176,13 @@ export async function submitAssessment(courseId: string, topicId: string, assess
       const currentCompleted = progressDoc.completedTopics.map((id: any) => id.toString());
       if (!currentCompleted.includes(topicId)) {
         progressDoc.completedTopics.push(new mongoose.Types.ObjectId(topicId));
-        if (totalTopicsInCourse > 0) {
-          progressDoc.progress = Math.min(100, Math.round((progressDoc.completedTopics.length / totalTopicsInCourse) * 100));
+        
+        const courseModules = await Module.find({ courseId });
+        const moduleIds = courseModules.map((m: any) => m._id);
+        const dynamicTotal = await Topic.countDocuments({ moduleId: { $in: moduleIds } });
+
+        if (dynamicTotal > 0) {
+          progressDoc.progress = Math.min(100, Math.round((progressDoc.completedTopics.length / dynamicTotal) * 100));
         } else {
           progressDoc.progress = 100;
         }
@@ -163,15 +191,15 @@ export async function submitAssessment(courseId: string, topicId: string, assess
 
     // Weakness Detection Algorithm (Rule-Based)
     // If score < 40 -> Critical, < 70 -> Warning. 
-    // We store the Topic ID or Assessment Title in weakAreas if score < 70.
-    const attemptTitle = `Topic ID: ${topicId}`;
+    // We store the Topic ObjectId in weakAreas if score < 70.
+    const tId = new mongoose.Types.ObjectId(topicId);
     if (score < 70) {
-      if (!progressDoc.weakAreas.includes(attemptTitle)) {
-        progressDoc.weakAreas.push(attemptTitle);
+      if (!progressDoc.weakAreas.some((w: any) => w.toString() === topicId)) {
+        progressDoc.weakAreas.push(tId);
       }
     } else {
       // If they passed this time, remove it from weak areas
-      progressDoc.weakAreas = progressDoc.weakAreas.filter((w: string) => w !== attemptTitle);
+      progressDoc.weakAreas = progressDoc.weakAreas.filter((w: any) => w.toString() !== topicId);
     }
 
     progressDoc.lastActivityAt = new Date();
@@ -208,7 +236,7 @@ export async function getStudentAnalytics() {
     
     const weakAreasSet = new Set<string>();
     progressDocs.forEach(doc => {
-      doc.weakAreas.forEach((w: string) => weakAreasSet.add(w));
+      doc.weakAreas.forEach((w: any) => weakAreasSet.add(w.toString()));
     });
 
     const recentAssessments = progressDocs.flatMap(doc => doc.assessmentAttempts);
