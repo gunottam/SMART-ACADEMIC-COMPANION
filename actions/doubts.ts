@@ -3,6 +3,8 @@
 import dbConnect from "@/lib/mongodb";
 import Doubt from "@/models/Doubt";
 import Course from "@/models/Course";
+import Topic from "@/models/Topic";
+import User from "@/models/User";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
@@ -50,12 +52,15 @@ export async function getTeacherDoubts() {
   try {
     await dbConnect();
     const session = await getServerSession(authOptions);
-    if (!session?.user || (session.user as any).role !== "teacher") {
+    if (!session?.user || ((session.user as any).role !== "teacher" && (session.user as any).role !== "admin")) {
       return { success: false, error: "Unauthorized" };
     }
-    const teacherId = (session.user as any).id;
+    const user = session.user as any;
+    
+    // If admin, they can see all open doubts. If teacher, only those assigned to them.
+    const query = user.role === "admin" ? { status: "Open" } : { teacherId: user.id, status: "Open" };
 
-    const doubts = await Doubt.find({ teacherId, status: "Open" })
+    const doubts = await Doubt.find(query)
       .populate("studentId", "name email")
       .populate("topicId", "title")
       .populate("courseId", "title")
@@ -75,13 +80,14 @@ export async function resolveDoubt(doubtId: string, answer: string) {
   try {
     await dbConnect();
     const session = await getServerSession(authOptions);
-    if (!session?.user || (session.user as any).role !== "teacher") {
+    if (!session?.user || ((session.user as any).role !== "teacher" && (session.user as any).role !== "admin")) {
       return { success: false, error: "Unauthorized" };
     }
-    const teacherId = (session.user as any).id;
+    const user = session.user as any;
+    const query = user.role === "admin" ? { _id: doubtId } : { _id: doubtId, teacherId: user.id };
 
     const doubt = await Doubt.findOneAndUpdate(
-      { _id: doubtId, teacherId },
+      query,
       { answer, status: "Resolved" },
       { new: true }
     );
@@ -93,6 +99,19 @@ export async function resolveDoubt(doubtId: string, answer: string) {
     return { success: true, doubt: JSON.parse(JSON.stringify(doubt)) };
   } catch (error: any) {
     console.error("Resolve doubt error:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function getTopicDoubts(topicId: string) {
+  try {
+    await dbConnect();
+    const doubts = await Doubt.find({ topicId, status: "Resolved" })
+      .populate("studentId", "name")
+      .sort({ updatedAt: -1 })
+      .lean();
+    return { success: true, doubts: JSON.parse(JSON.stringify(doubts)) };
+  } catch (error: any) {
     return { success: false, error: error.message };
   }
 }

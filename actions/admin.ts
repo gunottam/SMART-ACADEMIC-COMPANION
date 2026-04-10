@@ -116,3 +116,47 @@ export async function getAdminAnalytics() {
     return { success: false, error: error.message };
   }
 }
+
+import Course from "@/models/Course";
+import Module from "@/models/Module";
+import Topic from "@/models/Topic";
+import Assessment from "@/models/Assessment";
+import Assignment from "@/models/Assignment";
+
+export async function getAllCourses() {
+  try {
+    await verifyAdmin();
+    await dbConnect();
+    const courses = await Course.find({})
+      .populate("instructorId", "name email")
+      .sort({ createdAt: -1 })
+      .lean();
+    return { success: true, courses: JSON.parse(JSON.stringify(courses)) };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function deleteCourse(courseId: string) {
+  try {
+    await verifyAdmin();
+    await dbConnect();
+    
+    // Cascading delete
+    const modules = await Module.find({ courseId });
+    const moduleIds = modules.map(m => m._id);
+    const topics = await Topic.find({ moduleId: { $in: moduleIds } });
+    const topicIds = topics.map(t => t._id);
+    
+    await Assessment.deleteMany({ topicId: { $in: topicIds } });
+    await Assignment.deleteMany({ topicId: { $in: topicIds } });
+    await Topic.deleteMany({ moduleId: { $in: moduleIds } });
+    await Module.deleteMany({ courseId });
+    await Course.findByIdAndDelete(courseId);
+    
+    revalidatePath("/dashboard/admin/courses");
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}

@@ -45,7 +45,6 @@ const UserProgressSchema: Schema = new Schema(
 
 // Indexes to speed up progress lookups for a user in a course
 UserProgressSchema.index({ userId: 1, courseId: 1 });
-UserProgressSchema.index({ userId: 1, topicId: 1 });
 
 const UserProgress: Model<IUserProgress> = mongoose.models.UserProgress || mongoose.model<IUserProgress>('UserProgress', UserProgressSchema);
 export default UserProgress;

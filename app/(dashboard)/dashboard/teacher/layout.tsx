@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
-import { LayoutDashboard, BookOpen, Users, Settings, LogOut } from "lucide-react";
+import { LayoutDashboard, BookOpen, Users, Settings, LogOut, CheckSquare } from "lucide-react";
 
 // Teacher links
 const sidebarLinks = [
   { icon: LayoutDashboard, label: "Overview", href: "/dashboard/teacher" },
   { icon: BookOpen, label: "Manage Courses", href: "/dashboard/teacher/courses" },
+  { icon: CheckSquare, label: "Assessments", href: "/dashboard/teacher/assessments" },
   { icon: Users, label: "Students", href: "/dashboard/teacher/students" },
   { icon: Settings, label: "Settings", href: "/dashboard/teacher/settings" },
 ];

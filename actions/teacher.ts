@@ -300,11 +300,20 @@ export async function updateCourseWithCurriculum(courseId: string, data: {
              await Assignment.findByIdAndUpdate(topData.assignment._id, {
                title: topData.assignment.title.trim(),
                description: topData.assignment.description?.trim() || "No instructions provided.",
-               maxScore: topData.assignment.maxScore || 100
+               maxScore: topData.assignment.maxScore || 100,
+               dueDate: topData.assignment.dueDate || null,
              });
            } else {
              await Assignment.deleteMany({ topicId: topDoc._id });
-             await Assignment.create({ courseId, moduleId: modDoc._id, topicId: topDoc._id, title: topData.assignment.title.trim(), description: topData.assignment.description?.trim() || "No instructions provided.", maxScore: topData.assignment.maxScore || 100 });
+             await Assignment.create({ 
+               courseId, 
+               moduleId: modDoc._id, 
+               topicId: topDoc._id, 
+               title: topData.assignment.title.trim(), 
+               description: topData.assignment.description?.trim() || "No instructions provided.", 
+               maxScore: topData.assignment.maxScore || 100,
+               dueDate: topData.assignment.dueDate || null
+             });
            }
         } else {
            await Assignment.deleteMany({ topicId: topDoc._id });
@@ -511,5 +520,142 @@ export async function getTrackedStudentProgress(courseTitle: string) {
   } catch (error: any) {
     console.error("Track progress error:", error);
     return { success: false, error: error.message };
+  }
+}
+
+export async function addStandaloneAssessment(data: {
+  courseId: string;
+  title: string;
+  questions: any[];
+  passingScore: number;
+}) {
+  try {
+    const session = await verifyTeacher();
+    await dbConnect();
+    
+    const course = await Course.findById(data.courseId);
+    if (!course || (session.user as any).role !== "admin" && course.instructorId.toString() !== (session.user as any).id) {
+       throw new Error("Unauthorized to modify this course.");
+    }
+    
+    // Create a generic assessments module if it does not already exist
+    let moduleDoc = await Module.findOne({ courseId: data.courseId, title: "Additional Assessments" });
+    if (!moduleDoc) {
+       moduleDoc = await Module.create({
+         courseId: data.courseId,
+         title: "Additional Assessments",
+         description: "Standalone tests and quizzes",
+         order: 999
+       });
+    }
+    
+    // Create the Topic object to hold the assessment
+    const topicCount = await Topic.countDocuments({ moduleId: moduleDoc._id });
+    const topicDoc = await Topic.create({
+      moduleId: moduleDoc._id,
+      title: data.title,
+      content: "Please complete the assessment below.",
+      order: topicCount
+    });
+    
+    // Create Assessment
+    const mappedQs = data.questions.filter((q: any) => q.text?.trim() && q.options[0]?.trim()).map((q: any) => ({
+      text: q.text?.trim() || "Untitled Question",
+      options: q.options.map((o: string) => o?.trim() || "Empty Option"),
+      correctOptionIndex: q.correctOptionIndex || 0
+    }));
+    
+    const assessment = await Assessment.create({
+      topicId: topicDoc._id,
+      title: data.title,
+      questions: mappedQs,
+      passingScore: data.passingScore || 70
+    });
+
+    revalidatePath("/dashboard/teacher/assessments");
+    revalidatePath("/dashboard/student/courses");
+    
+    return { success: true, assessment: JSON.parse(JSON.stringify(assessment)) };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+export async function getTeacherAssessmentResults() {
+  try {
+    const session = await verifyTeacher();
+    await dbConnect();
+
+    const isAdmin = (session.user as any).role === "admin";
+    const courseQuery = isAdmin ? {} : { instructorId: (session.user as any).id };
+
+    const courses = await Course.find(courseQuery).select("_id title").lean();
+    const courseIds = courses.map((c: any) => c._id);
+
+    if (courseIds.length === 0) {
+      return { success: true, assessments: [], attempts: [] };
+    }
+
+    const modules = await Module.find({ courseId: { $in: courseIds } }).select("_id courseId title").lean();
+    const moduleIds = modules.map((m: any) => m._id);
+
+    const topics = await Topic.find({ moduleId: { $in: moduleIds } }).select("_id moduleId title").lean();
+    const topicIds = topics.map((t: any) => t._id);
+
+    const assessments = await Assessment.find({ topicId: { $in: topicIds } }).sort({ createdAt: -1 }).lean();
+    const progresses = await UserProgress.find({ courseId: { $in: courseIds } }).populate("userId", "name email").lean() as any[];
+
+    const courseMap = new Map(courses.map((c: any) => [c._id.toString(), c.title]));
+    const moduleMap = new Map(modules.map((m: any) => [m._id.toString(), m]));
+    const topicMap = new Map(topics.map((t: any) => [t._id.toString(), t]));
+    const assessmentMap = new Map(assessments.map((a: any) => [a._id.toString(), a]));
+
+    const flattenedAssessments = assessments.map((a: any) => {
+      const topic = topicMap.get(a.topicId?.toString());
+      const module = topic ? moduleMap.get(topic.moduleId?.toString()) : null;
+      const courseTitle = module ? courseMap.get(module.courseId?.toString()) : "Unknown Course";
+      return {
+        _id: a._id.toString(),
+        title: a.title,
+        passingScore: a.passingScore ?? 70,
+        questionCount: Array.isArray(a.questions) ? a.questions.length : 0,
+        topicTitle: topic?.title || "Unknown Topic",
+        moduleTitle: module?.title || "Unknown Module",
+        courseTitle,
+        createdAt: a.createdAt,
+      };
+    });
+
+    const attempts: any[] = [];
+    for (const p of progresses) {
+      const student = p.userId;
+      const courseTitle = courseMap.get(p.courseId?.toString()) || "Unknown Course";
+      for (const attempt of p.assessmentAttempts || []) {
+        const assessment = assessmentMap.get(attempt.assessmentId?.toString());
+        if (!assessment) continue;
+        const topic = topicMap.get(assessment.topicId?.toString());
+
+        attempts.push({
+          id: `${p._id.toString()}-${attempt.assessmentId?.toString()}-${attempt.timestamp}`,
+          assessmentTitle: assessment.title,
+          topicTitle: topic?.title || "Unknown Topic",
+          courseTitle,
+          studentName: student?.name || "Unknown Student",
+          studentEmail: student?.email || "No Email",
+          score: attempt.score,
+          timestamp: attempt.timestamp,
+        });
+      }
+    }
+
+    attempts.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    return {
+      success: true,
+      assessments: JSON.parse(JSON.stringify(flattenedAssessments)),
+      attempts: JSON.parse(JSON.stringify(attempts)),
+    };
+  } catch (error: any) {
+    return { success: false, error: error.message, assessments: [], attempts: [] };
   }
 }

@@ -261,23 +261,27 @@ export async function submitAssignment(courseId: string, assignmentId: string, c
     const session = await verifyStudent();
     await dbConnect();
     
-    const submission = await AssignmentSubmission.create({
-      assignmentId: new mongoose.Types.ObjectId(assignmentId),
-      userId: new mongoose.Types.ObjectId((session.user as any).id),
-      content,
-      submissionType,
-      status: "pending"
-    });
+    const userIdObj = new mongoose.Types.ObjectId(session.user.id);
+    const assignmentIdObj = new mongoose.Types.ObjectId(assignmentId);
 
-    const progressDoc = await UserProgress.findOne({ userId: (session.user as any).id, courseId });
+    const submission = await AssignmentSubmission.findOneAndUpdate(
+      { assignmentId: assignmentIdObj, userId: userIdObj },
+      { content, submissionType, status: "pending", submittedAt: new Date() },
+      { new: true, upsert: true }
+    );
+
+    const progressDoc = await UserProgress.findOne({ userId: userIdObj, courseId });
     if (progressDoc) {
       const existing = progressDoc.assignmentSubmissions.find((s: any) => s.assignmentId.toString() === assignmentId);
       if (!existing) {
         progressDoc.assignmentSubmissions.push({
-          assignmentId: new mongoose.Types.ObjectId(assignmentId),
+          assignmentId: assignmentIdObj,
           status: "pending",
           submittedAt: new Date()
         });
+      } else {
+        existing.status = "pending";
+        existing.submittedAt = new Date();
       }
       progressDoc.lastActivityAt = new Date();
       await progressDoc.save();

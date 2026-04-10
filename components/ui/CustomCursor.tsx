@@ -1,37 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { motion, useMotionValue, useSpring } from "framer-motion";
+import { useEffect, useRef } from "react";
 
 export function CustomCursor() {
-  const [isHovering, setIsHovering] = useState(false);
-
-  // Directly mutate values outside React's Virtual DOM rendering cycle
-  const mouseX = useMotionValue(0);
-  const mouseY = useMotionValue(0);
-
-  // Physics bindings
-  const smoothX = useSpring(mouseX, { stiffness: 1000, damping: 50, mass: 0.1 });
-  const smoothY = useSpring(mouseY, { stiffness: 1000, damping: 50, mass: 0.1 });
-
-  const smoothRingX = useSpring(mouseX, { stiffness: 150, damping: 15, mass: 0.8 });
-  const smoothRingY = useSpring(mouseY, { stiffness: 150, damping: 15, mass: 0.8 });
+  const dotRef = useRef<HTMLDivElement>(null);
+  const ringRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let animationFrameId: number;
-    // Start at center until movement is detected
-    let targetX = window.innerWidth / 2;
-    let targetY = window.innerHeight / 2;
+    let mouseX = window.innerWidth / 2;
+    let mouseY = window.innerHeight / 2;
+    let dotX = mouseX;
+    let dotY = mouseY;
+    let ringX = mouseX;
+    let ringY = mouseY;
+    let isHovering = false;
+    let rafId: number;
 
-    const updateMousePosition = (e: MouseEvent) => {
-      targetX = e.clientX;
-      targetY = e.clientY;
-    };
-
-    const loop = () => {
-      mouseX.set(targetX);
-      mouseY.set(targetY);
-      animationFrameId = requestAnimationFrame(loop);
+    const handleMouseMove = (e: MouseEvent) => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
     };
 
     const handleMouseOver = (e: MouseEvent) => {
@@ -44,42 +31,52 @@ export function CustomCursor() {
         target.closest('a') ||
         window.getComputedStyle(target).cursor === 'pointer'
       ) {
-        setIsHovering(true);
+        isHovering = true;
       } else {
-        setIsHovering(false);
+        isHovering = false;
       }
     };
 
-    window.addEventListener("mousemove", updateMousePosition, { passive: true });
+    window.addEventListener("mousemove", handleMouseMove, { passive: true });
     window.addEventListener("mouseover", handleMouseOver, { passive: true });
-    
-    mouseX.set(targetX);
-    mouseY.set(targetY);
-    loop();
+
+    const animate = () => {
+      // Easing physics
+      dotX += (mouseX - dotX) * 0.5;
+      dotY += (mouseY - dotY) * 0.5;
+      ringX += (mouseX - ringX) * 0.15;
+      ringY += (mouseY - ringY) * 0.15;
+
+      if (dotRef.current) {
+        dotRef.current.style.transform = `translate3d(${dotX}px, ${dotY}px, 0) translate(-50%, -50%) scale(${isHovering ? 0 : 1})`;
+      }
+
+      if (ringRef.current) {
+        ringRef.current.style.transform = `translate3d(${ringX}px, ${ringY}px, 0) translate(-50%, -50%) scale(${isHovering ? 1.5 : 1})`;
+        ringRef.current.style.backgroundColor = isHovering ? "rgba(52, 211, 153, 0.1)" : "rgba(52, 211, 153, 0)";
+      }
+
+      rafId = requestAnimationFrame(animate);
+    };
+
+    animate();
 
     return () => {
-      window.removeEventListener("mousemove", updateMousePosition);
+      window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseover", handleMouseOver);
-      cancelAnimationFrame(animationFrameId);
+      cancelAnimationFrame(rafId);
     };
-  }, [mouseX, mouseY]);
+  }, []);
 
   return (
     <>
-      <motion.div
-        className="fixed top-0 left-0 w-2.5 h-2.5 bg-cyan-400 rounded-full pointer-events-none z-[9999] mix-blend-screen"
-        style={{ x: smoothX, y: smoothY, translateX: "-50%", translateY: "-50%" }}
-        animate={{ scale: isHovering ? 0 : 1 }}
-        transition={{ type: "tween", ease: "backOut", duration: 0.1 }}
+      <div
+        ref={dotRef}
+        className="fixed top-0 left-0 w-2.5 h-2.5 bg-cyan-400 rounded-full pointer-events-none z-[9999] mix-blend-screen transition-transform duration-75"
       />
-      <motion.div
-        className="fixed top-0 left-0 w-10 h-10 border-2 border-emerald-400/80 rounded-full pointer-events-none z-[9998] mix-blend-screen shadow-[0_0_15px_rgba(52,211,153,0.5)]"
-        style={{ x: smoothRingX, y: smoothRingY, translateX: "-50%", translateY: "-50%" }}
-        animate={{
-          scale: isHovering ? 1.5 : 1,
-          backgroundColor: isHovering ? "rgba(52, 211, 153, 0.1)" : "rgba(52, 211, 153, 0)",
-        }}
-        transition={{ duration: 0.2 }}
+      <div
+        ref={ringRef}
+        className="fixed top-0 left-0 w-10 h-10 border-2 border-emerald-400/80 rounded-full pointer-events-none z-[9998] mix-blend-screen shadow-[0_0_15px_rgba(52,211,153,0.5)] transition-all duration-200"
       />
     </>
   );

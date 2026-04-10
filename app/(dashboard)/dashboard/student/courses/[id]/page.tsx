@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { getCourseWithCurriculum, startCourse, markTopicComplete, submitAssessment, submitAssignment } from "@/actions/student";
-import { submitDoubt } from "@/actions/doubts";
+import { submitDoubt, getTopicDoubts } from "@/actions/doubts";
 import { ArrowLeft, BookOpen, Loader2, PlayCircle, CheckCircle2, ChevronDown, ChevronRight, Check, Target } from "lucide-react";
 import Link from "next/link";
 
@@ -27,6 +27,7 @@ export default function CourseViewer() {
 
   // Doubt State
   const [doubtQuestion, setDoubtQuestion] = useState("");
+  const [topicDoubts, setTopicDoubts] = useState<any[]>([]);
   const [isSubmittingDoubt, setIsSubmittingDoubt] = useState(false);
   const [doubtSuccess, setDoubtSuccess] = useState(false);
   const [doubtError, setDoubtError] = useState("");
@@ -47,11 +48,14 @@ export default function CourseViewer() {
         const pRes = await startCourse(params.id as string);
         if (pRes.success) setProgressData(pRes.progress);
         
-        // Auto-expand the first module and select its first topic by default
+        // Auto-expand all modules so newly generated assessments are immediately visible
         if (res.curriculum.length > 0) {
-          setExpandedModules({ [res.curriculum[0]._id]: true });
-          if (res.curriculum[0].topics.length > 0) {
-            setActiveTopic(res.curriculum[0].topics[0]);
+          const expanded = Object.fromEntries(res.curriculum.map((m: any) => [m._id, true]));
+          setExpandedModules(expanded);
+
+          const firstTopicModule = res.curriculum.find((m: any) => m.topics && m.topics.length > 0);
+          if (firstTopicModule) {
+            setActiveTopic(firstTopicModule.topics[0]);
           }
         }
       }
@@ -68,6 +72,12 @@ export default function CourseViewer() {
       setIsRetaking(false);
       setAssignmentSubmission("");
       setAssignmentResult(null);
+      
+      if (activeTopic) {
+         getTopicDoubts(activeTopic._id).then(res => {
+            if (res.success) setTopicDoubts(res.doubts || []);
+         });
+      }
     }
   }, [activeTopic, viewMode]);
 
@@ -141,6 +151,7 @@ export default function CourseViewer() {
     if (res.success) {
       setDoubtSuccess(true);
       setDoubtQuestion("");
+      getTopicDoubts(activeTopic._id).then(r => setTopicDoubts(r.doubts || []));
       setTimeout(() => setDoubtSuccess(false), 3000);
     } else {
       setDoubtError(res.error || "Failed to submit doubt");
@@ -338,6 +349,45 @@ export default function CourseViewer() {
                   )}
                 </div>
               )}
+
+              {/* Doubt Forum / QA Board */}
+              <div className="bg-white/[0.02] border border-indigo-500/20 rounded-2xl p-8 mb-6 shadow-2xl shadow-indigo-900/10">
+                <h3 className="text-xl font-bold text-indigo-400 mb-2">Resolved Doubts</h3>
+                <p className="text-neutral-400 text-sm mb-6">See answered questions from this topic below.</p>
+                {topicDoubts.length > 0 ? (
+                  <div className="space-y-4">
+                    {topicDoubts.map((d: any) => (
+                      <div key={d._id} className="bg-[#0A0A0A] border border-white/5 rounded-xl p-5 shadow-inner">
+                        <div className="flex items-start gap-4">
+                          <div className="flex-1">
+                            <h4 className="text-sm font-bold text-neutral-300 flex items-center gap-2 mb-2">
+                              <span className="w-2 h-2 rounded-full bg-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.8)]"></span>
+                              Question by {d.studentId?.name || "Student"}:
+                            </h4>
+                            <p className="text-sm text-neutral-400 pl-4 border-l-2 border-white/5 mb-4">{d.question}</p>
+                            
+                            {d.answer && (
+                              <>
+                                <h4 className="text-sm font-bold text-emerald-400 flex items-center gap-2 mb-2">
+                                  <CheckCircle2 className="w-4 h-4" />
+                                  Instructor Answer:
+                                </h4>
+                                <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-lg p-4">
+                                  <p className="text-sm text-neutral-300 leading-relaxed whitespace-pre-wrap">{d.answer}</p>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-10 border border-dashed border-white/10 rounded-xl">
+                    <p className="text-neutral-500 text-sm">No resolved doubts for this topic yet.</p>
+                  </div>
+                )}
+              </div>
 
               {/* Ask a Doubt Block */}
               <div className="bg-white/[0.02] border border-cyan-500/20 rounded-2xl p-8 mb-12 shadow-2xl shadow-cyan-900/10">
