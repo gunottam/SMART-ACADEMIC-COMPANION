@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import SessionProviderWrapper from "@/components/providers/SessionProviderWrapper";
-import { Ambient3DBackground } from "@/components/ui/Ambient3DBackground";
+import AmbientBackground from "@/components/ui/AmbientBackground";
+import { Toaster } from "@/components/ui/Toaster";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -30,13 +31,13 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} antialiased`}
     >
-      <body className="min-h-screen bg-transparent text-neutral-50 relative overflow-x-hidden">
-        <Ambient3DBackground />
+      <body className="min-h-screen text-slate-900 relative overflow-x-hidden">
+        <AmbientBackground />
         <div className="relative z-10 min-h-screen">
           <SessionProviderWrapper>{children}</SessionProviderWrapper>
+          <Toaster />
         </div>
       </body>
     </html>
   );
 }
-

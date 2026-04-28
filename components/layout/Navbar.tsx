@@ -26,23 +26,21 @@ export default function Navbar() {
       transition={{ duration: 0.5, ease: "easeOut" }}
       className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
         scrolled
-          ? "backdrop-blur-md bg-[#0A0A0A]/70 border-b border-white/5"
+          ? "backdrop-blur-md bg-gradient-to-r from-white/92 via-[#f8fbff]/95 to-[#f0f6ff]/92 border-b border-slate-200/90"
           : "bg-transparent"
       }`}
     >
       <nav className="max-w-7xl mx-auto flex items-center justify-between px-6 py-4">
-        {/* Logo */}
-        <Link href="/" className="text-xl font-semibold tracking-tight text-neutral-50">
-          SAC<span className="text-indigo-400">.</span>
+        <Link href="/" className="text-xl font-semibold tracking-tight text-[#2563EB]">
+          SAC<span className="text-sky-400">.</span>
         </Link>
 
-        {/* Center Nav Links – hidden on mobile */}
         <ul className="hidden md:flex items-center gap-8">
           {navLinks.map((link) => (
             <li key={link.label}>
               <a
                 href={link.href}
-                className="text-sm text-neutral-400 hover:text-white transition-colors duration-200"
+                className="text-sm text-slate-600 hover:text-[#2563EB] transition-colors duration-200"
               >
                 {link.label}
               </a>
@@ -50,18 +48,17 @@ export default function Navbar() {
           ))}
         </ul>
 
-        {/* Right CTA */}
         <div className="flex items-center gap-3">
           <Link
             href="/login"
-            className="text-sm text-neutral-400 hover:text-white transition-colors duration-200 hidden sm:block"
+            className="text-sm text-slate-600 hover:text-[#2563EB] transition-colors duration-200 hidden sm:block"
           >
             Sign In
           </Link>
           <motion.div whileHover={{ scale: 0.98 }} transition={{ duration: 0.2 }}>
             <Link
               href="/login"
-              className="inline-flex items-center justify-center rounded-lg bg-white text-black text-sm font-medium px-4 py-2 hover:bg-neutral-200 transition-colors duration-200"
+              className="inline-flex items-center justify-center rounded-lg bg-[#2563EB] text-white text-sm font-medium px-4 py-2 hover:bg-[#1d4ed8] transition-colors duration-200 shadow-sm shadow-blue-600/20"
             >
               Get Started
             </Link>

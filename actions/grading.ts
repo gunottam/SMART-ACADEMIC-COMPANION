@@ -3,79 +3,122 @@
 import dbConnect from "@/lib/mongodb";
 import Assignment from "@/models/Assignment";
 import AssignmentSubmission from "@/models/AssignmentSubmission";
-import User from "@/models/User";
 import UserProgress from "@/models/UserProgress";
-import Course from "@/models/Course";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/authOptions";
 import { revalidatePath } from "next/cache";
 
-async function verifyTeacher() {
+async function requireInstructor() {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user.role !== "admin" && session.user.role !== "teacher")) {
+  if (
+    !session?.user?.id ||
+    (session.user.role !== "admin" && session.user.role !== "teacher")
+  ) {
     throw new Error("Unauthorized access.");
   }
   return session;
 }
 
+type PopulatedCourse = {
+  _id: unknown;
+  instructorId?: { toString: () => string };
+};
+
+type PopulatedAssignment = {
+  _id: unknown;
+  title?: string;
+  maxScore?: number;
+  courseId?: PopulatedCourse | null;
+};
+
 export async function getPendingSubmissions() {
   try {
-    const session = await verifyTeacher();
+    const session = await requireInstructor();
     await dbConnect();
 
-    // Find assignments directly mapping through the course
     const myAssignments = await Assignment.find()
-      .populate({ path: 'courseId', select: 'instructorId' })
-      .lean();
+      .populate({ path: "courseId", select: "instructorId" })
+      .lean<PopulatedAssignment[]>();
 
-    const allowedAssigIds = myAssignments
-      .filter((a: any) => a.courseId?.instructorId?.toString() === session.user.id || session.user.role === "admin")
-      .map((a: any) => a._id);
+    const allowedIds = myAssignments
+      .filter(
+        (a) =>
+          session.user.role === "admin" ||
+          a.courseId?.instructorId?.toString() === session.user.id
+      )
+      .map((a) => a._id);
 
     const submissions = await AssignmentSubmission.find({
-      assignmentId: { $in: allowedAssigIds },
-      status: "pending" // Only reviewing pending
+      assignmentId: { $in: allowedIds },
+      status: "pending",
     })
-    .populate('assignmentId', 'title maxScore', Assignment)
-    .populate('userId', 'name email', User)
-    .sort({ createdAt: -1 })
-    .lean();
+      .populate("assignmentId", "title maxScore")
+      .populate("userId", "name email")
+      .sort({ createdAt: -1 })
+      .lean();
 
-    return { success: true, submissions: JSON.parse(JSON.stringify(submissions)) };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+    return {
+      success: true as const,
+      submissions: JSON.parse(JSON.stringify(submissions)),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof Error ? error.message : "Failed to load submissions",
+      submissions: [] as unknown[],
+    };
   }
 }
 
-export async function gradeSubmission(submissionId: string, score: number, feedback: string) {
+export async function gradeSubmission(
+  submissionId: string,
+  score: number,
+  feedback: string
+) {
   try {
-    const session = await verifyTeacher();
+    const session = await requireInstructor();
     await dbConnect();
 
-    const existingSub = await AssignmentSubmission.findById(submissionId).populate({
-      path: 'assignmentId',
-      populate: { path: 'courseId' }
+    const existing = await AssignmentSubmission.findById(submissionId).populate({
+      path: "assignmentId",
+      populate: { path: "courseId" },
     });
 
-    if (!existingSub) throw new Error("Submission not found");
+    if (!existing) throw new Error("Submission not found");
 
-    if (session.user.role !== "admin" && existingSub.assignmentId?.courseId?.instructorId?.toString() !== session.user.id) {
+    const assignment = existing.assignmentId as unknown as {
+      courseId?: { _id?: unknown; instructorId?: { toString: () => string } };
+    } | null;
+
+    if (
+      session.user.role !== "admin" &&
+      assignment?.courseId?.instructorId?.toString() !== session.user.id
+    ) {
       throw new Error("Unauthorized to grade this submission.");
     }
 
-    const sub = await AssignmentSubmission.findByIdAndUpdate(submissionId, {
-      score,
-      teacherFeedback: feedback,
-      status: "graded",
-    }, { new: true });
+    const sub = await AssignmentSubmission.findByIdAndUpdate(
+      submissionId,
+      {
+        score,
+        teacherFeedback: feedback,
+        status: "graded",
+      },
+      { new: true }
+    );
 
-    // Sync grade to UserProgress
-    if (sub && existingSub.assignmentId?.courseId?._id) {
-      const courseId = existingSub.assignmentId.courseId._id;
-      const progress = await UserProgress.findOne({ userId: sub.userId, courseId });
-      
+    if (sub && assignment?.courseId?._id) {
+      const courseId = assignment.courseId._id;
+      const progress = await UserProgress.findOne({
+        userId: sub.userId,
+        courseId,
+      });
+
       if (progress) {
-        const pSub = progress.assignmentSubmissions.find((s: any) => s.assignmentId.toString() === sub.assignmentId.toString());
+        const pSub = progress.assignmentSubmissions.find(
+          (s) => s.assignmentId.toString() === sub.assignmentId.toString()
+        );
         if (pSub) {
           pSub.score = score;
           pSub.status = "graded";
@@ -83,8 +126,8 @@ export async function gradeSubmission(submissionId: string, score: number, feedb
           progress.assignmentSubmissions.push({
             assignmentId: sub.assignmentId,
             status: "graded",
-            score: score,
-            submittedAt: sub.submittedAt
+            score,
+            submittedAt: sub.submittedAt,
           });
         }
         await progress.save();
@@ -92,8 +135,15 @@ export async function gradeSubmission(submissionId: string, score: number, feedb
     }
 
     revalidatePath("/dashboard/teacher/assignments");
-    return { success: true, submission: JSON.parse(JSON.stringify(sub)) };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+    return {
+      success: true as const,
+      submission: JSON.parse(JSON.stringify(sub)),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof Error ? error.message : "Failed to grade submission",
+    };
   }
 }

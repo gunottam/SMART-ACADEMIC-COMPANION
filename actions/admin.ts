@@ -1,53 +1,68 @@
 "use server";
 
 import dbConnect from "@/lib/mongodb";
-import User from "@/models/User";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { revalidatePath } from "next/cache";
+import User, { UserRole } from "@/models/User";
+import Course from "@/models/Course";
+import Module from "@/models/Module";
+import Topic from "@/models/Topic";
+import Assessment from "@/models/Assessment";
+import Assignment from "@/models/Assignment";
+import AssignmentSubmission from "@/models/AssignmentSubmission";
 import UserProgress from "@/models/UserProgress";
+import Doubt from "@/models/Doubt";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/authOptions";
+import { revalidatePath } from "next/cache";
 
-async function verifyAdmin() {
+async function requireAdmin() {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "admin") {
-    throw new Error("Unauthorized access. Master Admin privileges required.");
+  if (!session?.user?.id || session.user.role !== "admin") {
+    throw new Error("Admin privileges required.");
   }
   return session;
 }
 
 export async function getAllUsers() {
   try {
-    await verifyAdmin();
+    await requireAdmin();
     await dbConnect();
-    const users = await User.find({}).sort({ createdAt: -1 });
-    return { success: true, users: JSON.parse(JSON.stringify(users)) };
-  } catch (error: any) {
-    return { success: false, error: error.message, users: [] };
+    const users = await User.find({}).sort({ createdAt: -1 }).lean();
+    return {
+      success: true as const,
+      users: JSON.parse(JSON.stringify(users)),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to load users",
+      users: [] as unknown[],
+    };
   }
 }
 
-export async function updateUserRole(userId: string, newRole: string) {
+export async function updateUserRole(userId: string, newRole: UserRole) {
   try {
-    const session = await verifyAdmin();
+    const session = await requireAdmin();
     await dbConnect();
-    
-    // Prevent accidental self-demotion lockout if it's the only admin
-    if ((session.user as any).id === userId && newRole !== "admin") {
-       throw new Error("Cannot demote your own active admin session.");
+
+    if (session.user.id === userId && newRole !== "admin") {
+      throw new Error("Cannot demote your own active admin session.");
     }
-    
+
     await User.findByIdAndUpdate(userId, { role: newRole });
     revalidatePath("/dashboard/admin/users");
-    
-    return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+    return { success: true as const };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to update role",
+    };
   }
 }
 
 export async function getAdminAnalytics() {
   try {
-    await verifyAdmin();
+    await requireAdmin();
     await dbConnect();
 
     const avgScores = await UserProgress.aggregate([
@@ -55,16 +70,16 @@ export async function getAdminAnalytics() {
         $group: {
           _id: "$courseId",
           averageProgress: { $avg: "$progress" },
-          totalStudents: { $sum: 1 }
-        }
+          totalStudents: { $sum: 1 },
+        },
       },
       {
         $lookup: {
           from: "courses",
           localField: "_id",
           foreignField: "_id",
-          as: "course"
-        }
+          as: "course",
+        },
       },
       { $unwind: "$course" },
       {
@@ -73,27 +88,22 @@ export async function getAdminAnalytics() {
           courseName: "$course.title",
           averageScore: { $round: ["$averageProgress", 2] },
           totalStudents: 1,
-          _id: 0
-        }
+          _id: 0,
+        },
       },
-      { $sort: { averageScore: -1 } }
+      { $sort: { averageScore: -1 } },
     ]);
 
     const weakTopics = await UserProgress.aggregate([
       { $unwind: "$weakAreas" },
-      {
-        $group: {
-          _id: "$weakAreas",
-          count: { $sum: 1 }
-        }
-      },
+      { $group: { _id: "$weakAreas", count: { $sum: 1 } } },
       {
         $lookup: {
           from: "topics",
           localField: "_id",
           foreignField: "_id",
-          as: "topicDetails"
-        }
+          as: "topicDetails",
+        },
       },
       { $unwind: { path: "$topicDetails", preserveNullAndEmptyArrays: true } },
       {
@@ -101,62 +111,100 @@ export async function getAdminAnalytics() {
           topicId: "$_id",
           topicName: { $ifNull: ["$topicDetails.title", "Unknown Topic"] },
           frequency: "$count",
-          _id: 0
-        }
+          _id: 0,
+        },
       },
       { $sort: { frequency: -1 } },
-      { $limit: 10 }
+      { $limit: 10 },
     ]);
 
-    return { 
-      success: true, 
-      analytics: JSON.parse(JSON.stringify({ avgScores, weakTopics })) 
+    return {
+      success: true as const,
+      analytics: JSON.parse(JSON.stringify({ avgScores, weakTopics })),
     };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof Error ? error.message : "Failed to load analytics",
+    };
   }
 }
 
-import Course from "@/models/Course";
-import Module from "@/models/Module";
-import Topic from "@/models/Topic";
-import Assessment from "@/models/Assessment";
-import Assignment from "@/models/Assignment";
+export async function getSystemSnapshot() {
+  try {
+    await requireAdmin();
+    await dbConnect();
+
+    const [users, courses, published, submissions, openDoubts] =
+      await Promise.all([
+        User.countDocuments(),
+        Course.countDocuments(),
+        Course.countDocuments({ status: "published" }),
+        AssignmentSubmission.countDocuments(),
+        Doubt.countDocuments({ status: "Open" }),
+      ]);
+
+    return {
+      success: true as const,
+      snapshot: { users, courses, published, submissions, openDoubts },
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof Error ? error.message : "Failed to load snapshot",
+    };
+  }
+}
 
 export async function getAllCourses() {
   try {
-    await verifyAdmin();
+    await requireAdmin();
     await dbConnect();
     const courses = await Course.find({})
       .populate("instructorId", "name email")
       .sort({ createdAt: -1 })
       .lean();
-    return { success: true, courses: JSON.parse(JSON.stringify(courses)) };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+    return {
+      success: true as const,
+      courses: JSON.parse(JSON.stringify(courses)),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to load courses",
+      courses: [] as unknown[],
+    };
   }
 }
 
 export async function deleteCourse(courseId: string) {
   try {
-    await verifyAdmin();
+    await requireAdmin();
     await dbConnect();
-    
-    // Cascading delete
-    const modules = await Module.find({ courseId });
-    const moduleIds = modules.map(m => m._id);
-    const topics = await Topic.find({ moduleId: { $in: moduleIds } });
-    const topicIds = topics.map(t => t._id);
-    
+
+    const modules = await Module.find({ courseId }).select("_id").lean();
+    const moduleIds = modules.map((m) => m._id);
+    const topics = await Topic.find({ moduleId: { $in: moduleIds } })
+      .select("_id")
+      .lean();
+    const topicIds = topics.map((t) => t._id);
+
     await Assessment.deleteMany({ topicId: { $in: topicIds } });
     await Assignment.deleteMany({ topicId: { $in: topicIds } });
     await Topic.deleteMany({ moduleId: { $in: moduleIds } });
     await Module.deleteMany({ courseId });
+    await UserProgress.deleteMany({ courseId });
+    await Doubt.deleteMany({ courseId });
     await Course.findByIdAndDelete(courseId);
-    
+
     revalidatePath("/dashboard/admin/courses");
-    return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+    return { success: true as const };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to delete course",
+    };
   }
 }

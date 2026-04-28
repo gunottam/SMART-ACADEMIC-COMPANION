@@ -3,11 +3,38 @@
 @source "../components";
 @source "../app";
 
+/* Brand: #2563EB · Surfaces: cool slate + soft blue gradients */
 @theme inline {
-  --color-background: #0a0a0a;
-  --color-foreground: #ededed;
-  --color-surface: #121212;
-  --color-accent: #818cf8;
+  --color-background: #f5f8ff;
+  --color-foreground: #0f172a;
+  --color-surface: #fafcff;
+  --color-accent: #2563eb;
+  --color-white: #ffffff;
+  --color-black: #0f172a;
+  --color-neutral-50: #f8fafc;
+  --color-neutral-100: #f1f5f9;
+  --color-neutral-200: #e2e8f0;
+  --color-neutral-300: #cbd5e1;
+  --color-neutral-400: #94a3b8;
+  --color-neutral-500: #64748b;
+  --color-neutral-600: #475569;
+  --color-neutral-700: #334155;
+  --color-neutral-800: #1e293b;
+  --color-neutral-900: #0f172a;
+  --color-indigo-300: #93c5fd;
+  --color-indigo-400: #60a5fa;
+  --color-indigo-500: #2563eb;
+  --color-cyan-300: #7dd3fc;
+  --color-cyan-400: #38bdf8;
+  --color-cyan-500: #0ea5e9;
+  --color-emerald-300: #6ee7b7;
+  --color-emerald-400: #34d399;
+  --color-emerald-500: #10b981;
+  --color-red-300: #fca5a5;
+  --color-red-400: #f87171;
+  --color-red-500: #ef4444;
+  --color-amber-500: #f59e0b;
+  --color-yellow-400: #fbbf24;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -17,8 +44,13 @@ html {
 }
 
 body {
-  background: #0a0a0a;
-  color: #ededed;
+  background: linear-gradient(
+    165deg,
+    #f3f7ff 0%,
+    #f8fafc 42%,
+    #eef4ff 100%
+  );
+  color: #0f172a;
   font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -26,16 +58,15 @@ body {
 
 /* Scrollbar styling */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #0a0a0a;
+  background: #f1f5f9;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
+  background: rgba(37, 99, 235, 0.35);
+  border-radius: 6px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(37, 99, 235, 0.55);
 }
-

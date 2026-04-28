@@ -9,286 +9,421 @@ import Assignment from "@/models/Assignment";
 import AssignmentSubmission from "@/models/AssignmentSubmission";
 import UserProgress from "@/models/UserProgress";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/authOptions";
 import mongoose from "mongoose";
+import { isMockDataMode } from "@/lib/config";
+import { MOCK_LEARNING_INSIGHTS, MOCK_STUDENT_ANALYTICS } from "@/lib/mock-data";
+import { buildStudentPerformanceSnapshot } from "@/lib/studentPerformance";
+import { generateLearningInsightsWithGroq } from "@/lib/groq";
+import { buildFallbackLearningInsights } from "@/lib/learningFallback";
+import type { LearningInsights } from "@/lib/groq";
+
+async function requireSession() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) throw new Error("Unauthorized");
+  return session;
+}
 
 export async function getPublishedCourses() {
   try {
     await dbConnect();
-    // Only return courses that have been explicitly published by teachers
     const courses = await Course.find({ status: "published" })
       .populate("instructorId", "name image")
-      .sort({ createdAt: -1 });
-    
-    return { success: true, courses: JSON.parse(JSON.stringify(courses)) };
-  } catch (error: any) {
-    return { success: false, error: error.message, courses: [] };
+      .sort({ createdAt: -1 })
+      .lean();
+    return { success: true as const, courses: JSON.parse(JSON.stringify(courses)) };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to load courses",
+      courses: [] as unknown[],
+    };
   }
 }
 
 export async function getCourseWithCurriculum(courseId: string) {
   try {
     await dbConnect();
-    
-    const course = await Course.findById(courseId).populate("instructorId", "name");
+
+    const course = await Course.findById(courseId)
+      .populate("instructorId", "name")
+      .lean();
     if (!course) throw new Error("Course not found");
 
-    const modules = await Module.find({ courseId }).sort({ order: 1 });
-    
-    const moduleIds = modules.map(m => m._id);
-    const topics = await Topic.find({ moduleId: { $in: moduleIds } }).sort({ order: 1 });
-    
-    // Fetch Assessments
-    const topicIds = topics.map(t => t._id);
-    const assessments = await Assessment.find({ topicId: { $in: topicIds } });
-    
-    // Fetch Assignments
-    const assignments = await Assignment.find({ topicId: { $in: topicIds } });
+    const modules = await Module.find({ courseId }).sort({ order: 1 }).lean();
+    const moduleIds = modules.map((m) => m._id);
+    const topics = await Topic.find({ moduleId: { $in: moduleIds } })
+      .sort({ order: 1 })
+      .lean();
 
-    const curriculum = modules.map(m => {
-      return {
-        ...m.toObject(),
-        topics: topics.filter(t => t.moduleId.toString() === m._id.toString()).map(t => {
-          const tObj = t.toObject();
-          const assessment = assessments.find(a => a.topicId.toString() === tObj._id.toString());
-          if (assessment) (tObj as any).assessment = assessment.toObject();
-          
-          const assignment = assignments.find(a => a.topicId?.toString() === tObj._id.toString());
-          if (assignment) (tObj as any).assignment = assignment.toObject();
+    const topicIds = topics.map((t) => t._id);
+    const [assessments, assignments] = await Promise.all([
+      Assessment.find({ topicId: { $in: topicIds } }).lean(),
+      Assignment.find({ topicId: { $in: topicIds } }).lean(),
+    ]);
 
-          return tObj;
-        })
-      };
-    });
+    const curriculum = modules.map((m) => ({
+      ...m,
+      topics: topics
+        .filter((t) => t.moduleId.toString() === m._id.toString())
+        .map((t) => {
+          const assessment = assessments.find(
+            (a) => a.topicId.toString() === t._id.toString()
+          );
+          const assignment = assignments.find(
+            (a) => a.topicId?.toString() === t._id.toString()
+          );
+          return {
+            ...t,
+            ...(assessment ? { assessment } : {}),
+            ...(assignment ? { assignment } : {}),
+          };
+        }),
+    }));
 
-    return { 
-      success: true, 
+    return {
+      success: true as const,
       course: JSON.parse(JSON.stringify(course)),
-      curriculum: JSON.parse(JSON.stringify(curriculum))
+      curriculum: JSON.parse(JSON.stringify(curriculum)),
     };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to load course",
+    };
   }
-}
-
-async function verifyStudent() {
-  const session = await getServerSession(authOptions);
-  if (!session) throw new Error("Unauthorized");
-  return session;
 }
 
 export async function startCourse(courseId: string) {
   try {
-    const session = await verifyStudent();
+    const session = await requireSession();
     await dbConnect();
 
-    // Init progress if missing
-    let progress = await UserProgress.findOne({ userId: (session.user as any).id, courseId });
+    let progress = await UserProgress.findOne({
+      userId: session.user.id,
+      courseId,
+    });
+
     if (!progress) {
       progress = await UserProgress.create({
-        userId: (session.user as any).id,
+        userId: session.user.id,
         courseId,
         progress: 0,
         completedTopics: [],
-        startedAt: Date.now()
+        startedAt: Date.now(),
       });
     }
 
-    const courseModules = await Module.find({ courseId });
-    const moduleIds = courseModules.map((m: any) => m._id);
-    const totalTopicsInCourse = await Topic.countDocuments({ moduleId: { $in: moduleIds } });
-
-    let calculatedProgress = 0;
-    if (totalTopicsInCourse > 0) {
-      calculatedProgress = Math.min(100, Math.round((progress.completedTopics.length / totalTopicsInCourse) * 100));
-    } else {
-      calculatedProgress = 100;
-    }
-
-    // Force sync the DB document if fundamentally desync'd
-    if (progress.progress !== calculatedProgress) {
-        progress.progress = calculatedProgress;
-        await progress.save();
-    }
-
-    console.log(`[STUDENT DASHBOARD] Progress Calculated: ${calculatedProgress}% for UserProgress ObjectId: ${progress._id}`);
-
-    return { success: true, progress: JSON.parse(JSON.stringify(progress)) };
-  } catch (error: any) {
-    return { success: false, error: error.message };
-  }
-}
-
-export async function markTopicComplete(courseId: string, topicId: string, totalTopicsInCourse: number) {
-  try {
-    const session = await verifyStudent();
-    await dbConnect();
-
-    const progressDoc = await UserProgress.findOne({ userId: (session.user as any).id, courseId });
-    if (!progressDoc) throw new Error("Progress document not initialized.");
-
-    // Avoid duplicate completions
-    const currentCompleted = progressDoc.completedTopics.map((id: any) => id.toString());
-    if (currentCompleted.includes(topicId)) {
-      return { success: true, progress: JSON.parse(JSON.stringify(progressDoc)) }; // Already completed
-    }
-
-    // Add to completed
-    progressDoc.completedTopics.push(new mongoose.Types.ObjectId(topicId));
-    
-    const courseModules = await Module.find({ courseId });
-    const moduleIds = courseModules.map((m: any) => m._id);
-    const dynamicTotal = await Topic.countDocuments({ moduleId: { $in: moduleIds } });
-
-    // Recalculate generic percent securely
-    if (dynamicTotal > 0) {
-      progressDoc.progress = Math.min(100, Math.round((progressDoc.completedTopics.length / dynamicTotal) * 100));
-    } else {
-      progressDoc.progress = 100;
-    }
-    
-    progressDoc.lastActivityAt = new Date();
-    await progressDoc.save();
-
-    return { success: true, progress: JSON.parse(JSON.stringify(progressDoc)) };
-  } catch (error: any) {
-    return { success: false, error: error.message };
-  }
-}
-
-export async function submitAssessment(courseId: string, topicId: string, assessmentId: string, score: number, totalTopicsInCourse: number) {
-  try {
-    const session = await verifyStudent();
-    await dbConnect();
-
-    const progressDoc = await UserProgress.findOne({ userId: (session.user as any).id, courseId });
-    if (!progressDoc) throw new Error("Progress document not initialized.");
-
-    // Record the attempt securely
-    progressDoc.assessmentAttempts.push({
-      assessmentId: new mongoose.Types.ObjectId(assessmentId),
-      score,
-      timestamp: new Date()
+    const moduleIds = (await Module.find({ courseId }).select("_id").lean()).map(
+      (m) => m._id
+    );
+    const totalTopics = await Topic.countDocuments({
+      moduleId: { $in: moduleIds },
     });
 
-    // Mark the underlying topic complete if they passed
+    const expected =
+      totalTopics > 0
+        ? Math.min(
+            100,
+            Math.round((progress.completedTopics.length / totalTopics) * 100)
+          )
+        : 0;
+
+    if (progress.progress !== expected) {
+      progress.progress = expected;
+      await progress.save();
+    }
+
+    return {
+      success: true as const,
+      progress: JSON.parse(JSON.stringify(progress)),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to start course",
+    };
+  }
+}
+
+async function recalcProgress(
+  progressDoc: mongoose.Document & {
+    completedTopics: mongoose.Types.ObjectId[];
+    progress: number;
+    lastActivityAt: Date;
+  },
+  courseId: string
+) {
+  const moduleIds = (await Module.find({ courseId }).select("_id").lean()).map(
+    (m) => m._id
+  );
+  const total = await Topic.countDocuments({ moduleId: { $in: moduleIds } });
+  progressDoc.progress =
+    total > 0
+      ? Math.min(
+          100,
+          Math.round((progressDoc.completedTopics.length / total) * 100)
+        )
+      : 0;
+  progressDoc.lastActivityAt = new Date();
+}
+
+export async function markTopicComplete(
+  courseId: string,
+  topicId: string,
+  _totalTopicsHint?: number
+) {
+  try {
+    void _totalTopicsHint;
+    const session = await requireSession();
+    await dbConnect();
+
+    const progress = await UserProgress.findOne({
+      userId: session.user.id,
+      courseId,
+    });
+    if (!progress) throw new Error("Progress document not initialised");
+
+    const already = progress.completedTopics.some(
+      (id) => id.toString() === topicId
+    );
+    if (!already) {
+      progress.completedTopics.push(new mongoose.Types.ObjectId(topicId));
+      await recalcProgress(progress, courseId);
+      await progress.save();
+    }
+
+    return {
+      success: true as const,
+      progress: JSON.parse(JSON.stringify(progress)),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to update progress",
+    };
+  }
+}
+
+export async function submitAssessment(
+  courseId: string,
+  topicId: string,
+  assessmentId: string,
+  score: number,
+  _totalTopicsHint?: number
+) {
+  try {
+    void _totalTopicsHint;
+    const session = await requireSession();
+    await dbConnect();
+
+    const progress = await UserProgress.findOne({
+      userId: session.user.id,
+      courseId,
+    });
+    if (!progress) throw new Error("Progress document not initialised");
+
+    progress.assessmentAttempts.push({
+      assessmentId: new mongoose.Types.ObjectId(assessmentId),
+      score,
+      timestamp: new Date(),
+    });
+
+    const topicObjectId = new mongoose.Types.ObjectId(topicId);
     if (score >= 70) {
-      const currentCompleted = progressDoc.completedTopics.map((id: any) => id.toString());
-      if (!currentCompleted.includes(topicId)) {
-        progressDoc.completedTopics.push(new mongoose.Types.ObjectId(topicId));
-        
-        const courseModules = await Module.find({ courseId });
-        const moduleIds = courseModules.map((m: any) => m._id);
-        const dynamicTotal = await Topic.countDocuments({ moduleId: { $in: moduleIds } });
-
-        if (dynamicTotal > 0) {
-          progressDoc.progress = Math.min(100, Math.round((progressDoc.completedTopics.length / dynamicTotal) * 100));
-        } else {
-          progressDoc.progress = 100;
-        }
-      }
+      const done = progress.completedTopics.some(
+        (id) => id.toString() === topicId
+      );
+      if (!done) progress.completedTopics.push(topicObjectId);
+      progress.weakAreas = progress.weakAreas.filter(
+        (w) => w.toString() !== topicId
+      );
+    } else if (!progress.weakAreas.some((w) => w.toString() === topicId)) {
+      progress.weakAreas.push(topicObjectId);
     }
 
-    // Weakness Detection Algorithm (Rule-Based)
-    // If score < 40 -> Critical, < 70 -> Warning. 
-    // We store the Topic ObjectId in weakAreas if score < 70.
-    const tId = new mongoose.Types.ObjectId(topicId);
-    if (score < 70) {
-      if (!progressDoc.weakAreas.some((w: any) => w.toString() === topicId)) {
-        progressDoc.weakAreas.push(tId);
-      }
-    } else {
-      // If they passed this time, remove it from weak areas
-      progressDoc.weakAreas = progressDoc.weakAreas.filter((w: any) => w.toString() !== topicId);
-    }
+    await recalcProgress(progress, courseId);
+    await progress.save();
 
-    progressDoc.lastActivityAt = new Date();
-    await progressDoc.save();
-
-    return { success: true, progress: JSON.parse(JSON.stringify(progressDoc)) };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+    return {
+      success: true as const,
+      progress: JSON.parse(JSON.stringify(progress)),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to submit assessment",
+    };
   }
 }
 
 export async function getStudentAnalytics() {
   try {
-    const session = await verifyStudent();
-    await dbConnect();
-    
-    const userId = (session.user as any).id;
-    const progressDocs = await UserProgress.find({ userId });
-    
-    const totalCoursesEnrolled = progressDocs.length;
-    let topicsCompleted = 0;
-    let totalAssessmentsTaken = 0;
-    let aggregateScore = 0;
-    
-    progressDocs.forEach(doc => {
-      topicsCompleted += doc.completedTopics.length;
-      doc.assessmentAttempts.forEach((attempt: any) => {
-        totalAssessmentsTaken++;
-        aggregateScore += attempt.score;
-      });
-    });
-    
-    const averageScore = totalAssessmentsTaken > 0 ? Math.round(aggregateScore / totalAssessmentsTaken) : 0;
-    
-    const weakAreasSet = new Set<string>();
-    progressDocs.forEach(doc => {
-      doc.weakAreas.forEach((w: any) => weakAreasSet.add(w.toString()));
-    });
+    const session = await requireSession();
 
-    const recentAssessments = progressDocs.flatMap(doc => doc.assessmentAttempts);
-    
-    return {
-      success: true,
-      stats: {
-        totalCoursesEnrolled,
-        topicsCompleted,
-        averageScore,
-        weakAreas: Array.from(weakAreasSet),
-        recentAssessments: JSON.parse(JSON.stringify(recentAssessments))
+    if (isMockDataMode()) {
+      return {
+        success: true as const,
+        stats: {
+          totalCoursesEnrolled: MOCK_STUDENT_ANALYTICS.totalCoursesEnrolled,
+          topicsCompleted: MOCK_STUDENT_ANALYTICS.topicsCompleted,
+          averageScore: MOCK_STUDENT_ANALYTICS.averageScore,
+          weakAreas: MOCK_STUDENT_ANALYTICS.weakAreas,
+          recentAssessments: MOCK_STUDENT_ANALYTICS.recentAssessments,
+          source: "mock" as const,
+        },
+      };
+    }
+
+    await dbConnect();
+
+    const userId = session.user.id;
+    const progresses = await UserProgress.find({ userId }).lean();
+
+    const weakAreaIds = [
+      ...new Set(
+        progresses.flatMap((p) =>
+          (p.weakAreas || []).map((w) => w.toString())
+        )
+      ),
+    ];
+    const weakTopicsDoc =
+      weakAreaIds.length > 0
+        ? await Topic.find({ _id: { $in: weakAreaIds } })
+            .select("title")
+            .lean()
+        : [];
+    const weakAreaTitles = weakTopicsDoc
+      .map((t) => t.title)
+      .filter((x): x is string => Boolean(x));
+
+    let topicsCompleted = 0;
+    let attemptsCount = 0;
+    let scoreSum = 0;
+
+    for (const p of progresses) {
+      topicsCompleted += (p.completedTopics || []).length;
+      for (const a of p.assessmentAttempts || []) {
+        attemptsCount += 1;
+        scoreSum += a.score;
       }
+    }
+
+    const recentAssessments = progresses.flatMap(
+      (p) => p.assessmentAttempts || []
+    );
+
+    return {
+      success: true as const,
+      stats: {
+        totalCoursesEnrolled: progresses.length,
+        topicsCompleted,
+        averageScore:
+          attemptsCount > 0 ? Math.round(scoreSum / attemptsCount) : 0,
+        weakAreas: weakAreaTitles,
+        recentAssessments: JSON.parse(JSON.stringify(recentAssessments)),
+        source: "live" as const,
+      },
     };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to load analytics",
+    };
   }
 }
 
-export async function submitAssignment(courseId: string, assignmentId: string, content: string, submissionType: "text" | "file") {
-  try {
-    const session = await verifyStudent();
-    await dbConnect();
-    
-    const userIdObj = new mongoose.Types.ObjectId(session.user.id);
-    const assignmentIdObj = new mongoose.Types.ObjectId(assignmentId);
+export type StudentLearningInsightsResult =
+  | {
+      success: true;
+      insights: LearningInsights;
+      source: "mock" | "groq" | "fallback";
+    }
+  | { success: false; error: string };
 
-    const submission = await AssignmentSubmission.findOneAndUpdate(
-      { assignmentId: assignmentIdObj, userId: userIdObj },
-      { content, submissionType, status: "pending", submittedAt: new Date() },
+/** Groq-powered weak-area detection + personalized study plan (fallback if no API key). */
+export async function getStudentLearningInsights(): Promise<StudentLearningInsightsResult> {
+  try {
+    const session = await requireSession();
+
+    if (isMockDataMode()) {
+      return {
+        success: true as const,
+        insights: MOCK_LEARNING_INSIGHTS,
+        source: "mock" as const,
+      };
+    }
+
+    const snapshot = await buildStudentPerformanceSnapshot(session.user.id);
+    const groqInsights = await generateLearningInsightsWithGroq(
+      JSON.stringify(snapshot)
+    );
+    const insights =
+      groqInsights ?? buildFallbackLearningInsights(snapshot);
+
+    return {
+      success: true as const,
+      insights,
+      source: groqInsights ? ("groq" as const) : ("fallback" as const),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof Error ? error.message : "Failed to build learning plan",
+    };
+  }
+}
+
+export async function submitAssignment(
+  courseId: string,
+  assignmentId: string,
+  content: string,
+  submissionType: "text" | "file"
+) {
+  try {
+    const session = await requireSession();
+    await dbConnect();
+
+    const userId = new mongoose.Types.ObjectId(session.user.id);
+    const assignmentObjectId = new mongoose.Types.ObjectId(assignmentId);
+
+    await AssignmentSubmission.findOneAndUpdate(
+      { assignmentId: assignmentObjectId, userId },
+      {
+        content,
+        submissionType,
+        status: "pending",
+        submittedAt: new Date(),
+      },
       { new: true, upsert: true }
     );
 
-    const progressDoc = await UserProgress.findOne({ userId: userIdObj, courseId });
-    if (progressDoc) {
-      const existing = progressDoc.assignmentSubmissions.find((s: any) => s.assignmentId.toString() === assignmentId);
-      if (!existing) {
-        progressDoc.assignmentSubmissions.push({
-          assignmentId: assignmentIdObj,
-          status: "pending",
-          submittedAt: new Date()
-        });
-      } else {
+    const progress = await UserProgress.findOne({ userId, courseId });
+    if (progress) {
+      const existing = progress.assignmentSubmissions.find(
+        (s) => s.assignmentId.toString() === assignmentId
+      );
+      if (existing) {
         existing.status = "pending";
         existing.submittedAt = new Date();
+      } else {
+        progress.assignmentSubmissions.push({
+          assignmentId: assignmentObjectId,
+          status: "pending",
+          submittedAt: new Date(),
+        });
       }
-      progressDoc.lastActivityAt = new Date();
-      await progressDoc.save();
+      progress.lastActivityAt = new Date();
+      await progress.save();
     }
 
-    return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+    return { success: true as const };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof Error ? error.message : "Failed to submit assignment",
+    };
   }
 }

@@ -31,27 +31,25 @@ const footerSections = [
 
 export default function Footer() {
   return (
-    <footer className="border-t border-white/5 bg-[#0A0A0A]">
+    <footer className="border-t border-slate-200 bg-gradient-to-b from-[#f5f8ff] via-[#f8fafc] to-[#eef4ff]">
       <div className="max-w-7xl mx-auto px-6 py-16">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-10">
-          {/* Brand Column */}
           <div className="col-span-2 md:col-span-1">
             <Link
               href="/"
-              className="text-xl font-semibold tracking-tight text-neutral-50"
+              className="text-xl font-semibold tracking-tight text-[#2563EB]"
             >
-              SAC<span className="text-indigo-400">.</span>
+              SAC<span className="text-sky-400">.</span>
             </Link>
-            <p className="mt-4 text-sm leading-relaxed text-neutral-500 max-w-xs">
+            <p className="mt-4 text-sm leading-relaxed text-slate-600 max-w-xs">
               An intelligent tutoring system that adapts to your learning style
               and helps you master your curriculum.
             </p>
           </div>
 
-          {/* Link Columns */}
           {footerSections.map((section) => (
             <div key={section.title}>
-              <h4 className="text-sm font-medium text-neutral-200 mb-4">
+              <h4 className="text-sm font-medium text-slate-800 mb-4">
                 {section.title}
               </h4>
               <ul className="space-y-3">
@@ -59,7 +57,7 @@ export default function Footer() {
                   <li key={link.label}>
                     <a
                       href={link.href}
-                      className="text-sm text-neutral-500 hover:text-neutral-300 transition-colors duration-200"
+                      className="text-sm text-slate-600 hover:text-[#2563EB] transition-colors duration-200"
                     >
                       {link.label}
                     </a>
@@ -70,27 +68,26 @@ export default function Footer() {
           ))}
         </div>
 
-        {/* Bottom Bar */}
-        <div className="mt-16 pt-8 border-t border-white/5 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p className="text-xs text-neutral-500">
+        <div className="mt-16 pt-8 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <p className="text-xs text-slate-500">
             &copy; {new Date().getFullYear()} SAC. All rights reserved.
           </p>
           <div className="flex items-center gap-6">
             <a
               href="#"
-              className="text-xs text-neutral-500 hover:text-neutral-300 transition-colors"
+              className="text-xs text-slate-500 hover:text-[#2563EB] transition-colors"
             >
               Twitter
             </a>
             <a
               href="#"
-              className="text-xs text-neutral-500 hover:text-neutral-300 transition-colors"
+              className="text-xs text-slate-500 hover:text-[#2563EB] transition-colors"
             >
               GitHub
             </a>
             <a
               href="#"
-              className="text-xs text-neutral-500 hover:text-neutral-300 transition-colors"
+              className="text-xs text-slate-500 hover:text-[#2563EB] transition-colors"
             >
               Discord
             </a>

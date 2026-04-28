@@ -3,10 +3,10 @@
 import dbConnect from "@/lib/mongodb";
 import Doubt from "@/models/Doubt";
 import Course from "@/models/Course";
-import Topic from "@/models/Topic";
-import User from "@/models/User";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/authOptions";
+import { isMockDataMode } from "@/lib/config";
+import { MOCK_TEACHER_DOUBTS } from "@/lib/mock-data";
 
 export async function submitDoubt(data: {
   courseId: string;
@@ -14,51 +14,54 @@ export async function submitDoubt(data: {
   question: string;
 }) {
   try {
-    await dbConnect();
     const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return { success: false, error: "Unauthorized" };
-    }
-    const studentId = (session.user as any).id;
+    if (!session?.user?.id) return { success: false as const, error: "Unauthorized" };
 
-    // Get the course to find the teacherId
-    const course = await Course.findById(data.courseId);
-    if (!course) {
-      return { success: false, error: "Course not found" };
-    }
+    await dbConnect();
 
-    const teacherId = course.instructorId;
-    if (!teacherId) {
-      return { success: false, error: "Course has no associated teacher" };
-    }
+    const course = await Course.findById(data.courseId).select("instructorId");
+    if (!course) return { success: false as const, error: "Course not found" };
+    if (!course.instructorId)
+      return {
+        success: false as const,
+        error: "Course has no associated teacher",
+      };
 
-    const doubt = new Doubt({
-      studentId,
-      teacherId,
+    const doubt = await Doubt.create({
+      studentId: session.user.id,
+      teacherId: course.instructorId,
       courseId: data.courseId,
       topicId: data.topicId,
-      question: data.question,
+      question: data.question.trim(),
     });
 
-    await doubt.save();
-    return { success: true, doubt: JSON.parse(JSON.stringify(doubt)) };
-  } catch (error: any) {
-    console.error("Submit doubt error:", error);
-    return { success: false, error: error.message };
+    return { success: true as const, doubt: JSON.parse(JSON.stringify(doubt)) };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to submit doubt",
+    };
   }
 }
 
 export async function getTeacherDoubts() {
   try {
-    await dbConnect();
     const session = await getServerSession(authOptions);
-    if (!session?.user || ((session.user as any).role !== "teacher" && (session.user as any).role !== "admin")) {
-      return { success: false, error: "Unauthorized" };
+    const role = session?.user?.role;
+    if (!session?.user?.id || (role !== "teacher" && role !== "admin")) {
+      return { success: false as const, error: "Unauthorized", doubts: [] };
     }
-    const user = session.user as any;
-    
-    // If admin, they can see all open doubts. If teacher, only those assigned to them.
-    const query = user.role === "admin" ? { status: "Open" } : { teacherId: user.id, status: "Open" };
+
+    if (isMockDataMode()) {
+      return { success: true as const, doubts: MOCK_TEACHER_DOUBTS };
+    }
+
+    await dbConnect();
+
+    const query =
+      role === "admin"
+        ? { status: "Open" as const }
+        : { teacherId: session.user.id, status: "Open" as const };
 
     const doubts = await Doubt.find(query)
       .populate("studentId", "name email")
@@ -67,39 +70,59 @@ export async function getTeacherDoubts() {
       .sort({ createdAt: -1 })
       .lean();
 
-    const cleanDoubts = doubts.filter((d: any) => d.courseId && d.topicId);
+    const clean = doubts.filter((d) => d.courseId && d.topicId);
 
-    return { success: true, doubts: JSON.parse(JSON.stringify(cleanDoubts)) };
-  } catch (error: any) {
-    console.error("Get teacher doubts error:", error);
-    return { success: false, error: error.message };
+    return {
+      success: true as const,
+      doubts: JSON.parse(JSON.stringify(clean)),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to load doubts",
+      doubts: [],
+    };
   }
 }
 
 export async function resolveDoubt(doubtId: string, answer: string) {
   try {
-    await dbConnect();
     const session = await getServerSession(authOptions);
-    if (!session?.user || ((session.user as any).role !== "teacher" && (session.user as any).role !== "admin")) {
-      return { success: false, error: "Unauthorized" };
+    const role = session?.user?.role;
+    if (!session?.user?.id || (role !== "teacher" && role !== "admin")) {
+      return { success: false as const, error: "Unauthorized" };
     }
-    const user = session.user as any;
-    const query = user.role === "admin" ? { _id: doubtId } : { _id: doubtId, teacherId: user.id };
+
+    if (isMockDataMode() && doubtId.startsWith("mock-")) {
+      return { success: true as const, doubt: { _id: doubtId } };
+    }
+
+    await dbConnect();
+
+    const query =
+      role === "admin"
+        ? { _id: doubtId }
+        : { _id: doubtId, teacherId: session.user.id };
 
     const doubt = await Doubt.findOneAndUpdate(
       query,
-      { answer, status: "Resolved" },
+      { answer: answer.trim(), status: "Resolved" },
       { new: true }
     );
 
     if (!doubt) {
-      return { success: false, error: "Doubt not found or access denied" };
+      return {
+        success: false as const,
+        error: "Doubt not found or access denied",
+      };
     }
 
-    return { success: true, doubt: JSON.parse(JSON.stringify(doubt)) };
-  } catch (error: any) {
-    console.error("Resolve doubt error:", error);
-    return { success: false, error: error.message };
+    return { success: true as const, doubt: JSON.parse(JSON.stringify(doubt)) };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to resolve doubt",
+    };
   }
 }
 
@@ -110,8 +133,15 @@ export async function getTopicDoubts(topicId: string) {
       .populate("studentId", "name")
       .sort({ updatedAt: -1 })
       .lean();
-    return { success: true, doubts: JSON.parse(JSON.stringify(doubts)) };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+    return {
+      success: true as const,
+      doubts: JSON.parse(JSON.stringify(doubts)),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to load doubts",
+      doubts: [],
+    };
   }
 }

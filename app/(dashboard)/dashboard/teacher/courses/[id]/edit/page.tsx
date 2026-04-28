@@ -70,7 +70,7 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
   if (loading) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-emerald-500" />
+        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
       </div>
     );
   }
@@ -78,68 +78,68 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
   return (
     <div className="p-8 max-w-5xl mx-auto space-y-8">
       <div>
-        <Link href="/dashboard/teacher/courses" className="inline-flex items-center gap-2 text-sm text-neutral-400 hover:text-neutral-200 mb-6 transition-colors">
+        <Link href="/dashboard/teacher/courses" className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-slate-800 mb-6 transition-colors">
           <ArrowLeft className="w-4 h-4" />
           Back to Courses
         </Link>
-        <h1 className="text-3xl font-semibold text-neutral-50 mb-2">Edit Course</h1>
-        <p className="text-neutral-400">Modify your existing curriculum structure safely.</p>
+        <h1 className="text-3xl font-semibold text-slate-900 mb-2">Edit Course</h1>
+        <p className="text-slate-600">Modify your existing curriculum structure safely.</p>
       </div>
 
-      <div className="flex items-center gap-6 border-b border-white/10 pb-4">
+      <div className="flex items-center gap-6 border-b border-slate-200 pb-4">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={`text-sm font-medium transition-colors relative ${
-              activeTab === tab.id ? "text-emerald-400" : "text-neutral-500 hover:text-neutral-300"
+              activeTab === tab.id ? "text-blue-600" : "text-slate-500 hover:text-slate-700"
             }`}
           >
             {tab.label}
             {activeTab === tab.id && (
               <motion.div
                 layoutId="activeTab"
-                className="absolute -bottom-[17px] left-0 right-0 h-[2px] bg-emerald-400"
+                className="absolute -bottom-[17px] left-0 right-0 h-[2px] bg-blue-600"
               />
             )}
           </button>
         ))}
       </div>
 
-      <StaggerWrapper className="rounded-2xl border border-emerald-500/20 bg-black/20 backdrop-blur-2xl p-8 min-h-[500px] shadow-2xl shadow-emerald-900/10 relative">
+      <StaggerWrapper className="rounded-2xl border border-blue-100 bg-slate-50 backdrop-blur-2xl p-8 min-h-[500px] shadow-2xl shadow-sm relative">
         {activeTab === "details" && (
           <div className="space-y-6 max-w-2xl text-left">
             <div>
-              <label className="block text-sm font-medium text-neutral-300 mb-2">Course Title</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Course Title</label>
               <input 
                 type="text" 
                 value={formData.title}
                 onChange={(e) => setFormData({...formData, title: e.target.value})}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-neutral-100 focus:outline-none focus:border-emerald-500/50"
+                className="w-full bg-white/5 border border-slate-200 rounded-lg px-4 py-3 text-sm text-slate-900 focus:outline-none focus:border-blue-500/50"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-neutral-300 mb-2">Description</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Description</label>
               <textarea 
                 rows={4}
                 value={formData.description}
                 onChange={(e) => setFormData({...formData, description: e.target.value})}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-neutral-100 focus:outline-none focus:border-emerald-500/50"
+                className="w-full bg-white/5 border border-slate-200 rounded-lg px-4 py-3 text-sm text-slate-900 focus:outline-none focus:border-blue-500/50"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-neutral-300 mb-2">Tags</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Tags</label>
               <input 
                 type="text" 
                 value={formData.tags}
                 onChange={(e) => setFormData({...formData, tags: e.target.value})}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm text-neutral-100 focus:outline-none focus:border-emerald-500/50"
+                className="w-full bg-white/5 border border-slate-200 rounded-lg px-4 py-3 text-sm text-slate-900 focus:outline-none focus:border-blue-500/50"
               />
             </div>
             <div className="pt-4">
               <button 
                 onClick={() => setActiveTab("curriculum")}
-                className="bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium transition-colors"
+                className="bg-[#2563EB] hover:bg-[#1d4ed8] text-white px-6 py-2.5 rounded-lg text-sm font-medium transition-colors"
               >
                 Save & Continue
               </button>
@@ -151,23 +151,23 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
           <div className="space-y-6 text-left">
             <div className="flex justify-between items-center mb-6">
               <div>
-                <h3 className="text-lg font-medium text-neutral-200">Course Curriculum</h3>
+                <h3 className="text-lg font-medium text-slate-800">Course Curriculum</h3>
               </div>
               <button 
                 onClick={() => setModules([...modules, { id: Date.now().toString(), title: "", description: "", topics: [] }])}
-                className="bg-white/5 hover:bg-white/10 text-neutral-200 px-4 py-2 rounded-lg text-sm font-medium border border-white/10"
+                className="bg-white/5 hover:bg-white/10 text-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-200"
               >
                 + Add Module
               </button>
             </div>
 
             {modules.length === 0 ? (
-               <p className="text-neutral-500">No modules present.</p>
+               <p className="text-slate-500">No modules present.</p>
             ) : (
               <StaggerWrapper className="space-y-6">
                 {modules.map((mod, mIndex) => (
-                  <div key={mod.id || mod._id} className="border border-cyan-500/20 rounded-xl p-6 bg-black/40 backdrop-blur-md shadow-2xl shadow-cyan-900/10 relative overflow-hidden">
-                    <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/5 to-transparent pointer-events-none" />
+                  <div key={mod.id || mod._id} className="border border-blue-100 rounded-xl p-6 bg-slate-100 backdrop-blur-md shadow-2xl shadow-sm relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-r from-blue-500/5 to-transparent pointer-events-none" />
                     <div className="flex justify-between items-start mb-4">
                       <div className="flex-1 space-y-3 mr-4">
                         <input 
@@ -179,7 +179,7 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
                             newM[mIndex].title = e.target.value;
                             setModules(newM);
                           }}
-                          className="w-full bg-transparent border-b border-white/10 pb-2 text-lg font-medium text-neutral-200 focus:outline-none focus:border-emerald-500/50"
+                          className="w-full bg-transparent border-b border-slate-200 pb-2 text-lg font-medium text-slate-800 focus:outline-none focus:border-blue-500/50"
                         />
                       </div>
                       <button 
@@ -190,16 +190,16 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
                       </button>
                     </div>
 
-                    <div className="mt-6 space-y-3 pl-4 border-l-2 border-white/5">
+                    <div className="mt-6 space-y-3 pl-4 border-l-2 border-slate-200">
                       {mod.topics?.map((topic: any, tIndex: number) => (
-                        <div key={topic.id || topic._id} className="bg-white/5 border border-white/10 rounded-lg p-4 space-y-3 relative group">
+                        <div key={topic.id || topic._id} className="bg-white/5 border border-slate-200 rounded-lg p-4 space-y-3 relative group">
                           <button 
                             onClick={() => {
                               const newM = [...modules];
                               newM[mIndex].topics = newM[mIndex].topics.filter((_: any, i: number) => i !== tIndex);
                               setModules(newM);
                             }}
-                            className="absolute right-4 top-4 text-neutral-500 hover:text-red-400 text-xs transition-opacity"
+                            className="absolute right-4 top-4 text-slate-500 hover:text-red-400 text-xs transition-opacity"
                           >
                             Remove
                           </button>
@@ -213,7 +213,7 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
                                 newM[mIndex].topics[tIndex].title = e.target.value;
                                 setModules(newM);
                               }}
-                              className="w-full md:w-3/4 bg-transparent text-sm font-medium text-neutral-200 focus:outline-none mb-3"
+                              className="w-full md:w-3/4 bg-transparent text-sm font-medium text-slate-800 focus:outline-none mb-3"
                             />
                             <textarea
                               rows={4}
@@ -223,7 +223,7 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
                                 newM[mIndex].topics[tIndex].content = e.target.value;
                                 setModules(newM);
                               }}
-                              className="w-full bg-black/40 border border-white/5 rounded-md px-3 py-2 text-sm text-neutral-300 md:resize-y focus:outline-none focus:border-emerald-500/50"
+                              className="w-full bg-slate-100 border border-slate-200 rounded-md px-3 py-2 text-sm text-slate-700 md:resize-y focus:outline-none focus:border-blue-500/50"
                             />
 
                             <div className="flex flex-wrap items-center gap-4 mt-2 mb-2">
@@ -234,7 +234,7 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
                                     newM[mIndex].topics[tIndex].assessment = { title: "Topic Quiz", questions: [{ text: "", options: ["", "", "", ""], correctOptionIndex: 0 }] };
                                     setModules(newM);
                                   }}
-                                  className="text-[11px] uppercase text-cyan-500 font-bold"
+                                  className="text-[11px] uppercase text-blue-600 font-bold"
                                 >
                                   + Quiz
                                 </button>
@@ -246,7 +246,7 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
                                     newM[mIndex].topics[tIndex].assignment = { title: "", description: "", maxScore: 100 };
                                     setModules(newM);
                                   }}
-                                  className="text-[11px] uppercase text-amber-500 font-bold"
+                                  className="text-[11px] uppercase text-[#2563EB] font-bold"
                                 >
                                   + Assignment
                                 </button>
@@ -254,10 +254,10 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
                             </div>
 
                             {topic.assessment && (
-                              <div className="mt-4 p-4 border border-cyan-500/20 bg-cyan-950/20 rounded-lg space-y-4">
+                              <div className="mt-4 p-4 border border-blue-100 bg-blue-50 rounded-lg space-y-4">
                                 <div className="flex justify-between items-center">
                                   <input 
-                                    className="bg-transparent text-sm font-semibold text-cyan-400 focus:outline-none flex-1"
+                                    className="bg-transparent text-sm font-semibold text-blue-600 focus:outline-none flex-1"
                                     value={topic.assessment.title}
                                     onChange={(e) => {
                                       const newM = [...modules];
@@ -268,15 +268,15 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
                                   <button onClick={() => { const newM = [...modules]; delete newM[mIndex].topics[tIndex].assessment; setModules(newM); }} className="text-[10px] text-red-400 font-bold uppercase">Remove</button>
                                 </div>
                                 {topic.assessment.questions.map((q: any, qIndex: number) => (
-                                  <div key={qIndex} className="p-4 bg-[#0A0A0A] border border-white/5 space-y-3">
+                                  <div key={qIndex} className="p-4 bg-white border border-slate-200 space-y-3">
                                     <input 
-                                      className="w-full bg-transparent text-sm focus:outline-none border-b border-white/5 pb-2"
+                                      className="w-full bg-transparent text-sm focus:outline-none border-b border-slate-200 pb-2"
                                       value={q.text}
                                       onChange={(e) => { const newM = [...modules]; newM[mIndex].topics[tIndex].assessment.questions[qIndex].text = e.target.value; setModules(newM); }}
                                     />
                                     <div className="grid grid-cols-2 gap-3">
                                       {q.options.map((opt: string, optIndex: number) => (
-                                        <div key={optIndex} className="flex gap-2 bg-white/[0.02] p-2 border border-white/5">
+                                        <div key={optIndex} className="flex gap-2 bg-slate-50 p-2 border border-slate-200">
                                           <input type="radio" checked={q.correctOptionIndex === optIndex} onChange={() => { const newM = [...modules]; newM[mIndex].topics[tIndex].assessment.questions[qIndex].correctOptionIndex = optIndex; setModules(newM); }} />
                                           <input className="bg-transparent flex-1 text-xs focus:outline-none" value={opt} onChange={(e) => { const newM = [...modules]; newM[mIndex].topics[tIndex].assessment.questions[qIndex].options[optIndex] = e.target.value; setModules(newM); }} />
                                         </div>
@@ -284,15 +284,15 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
                                     </div>
                                   </div>
                                 ))}
-                                <button onClick={() => { const newM = [...modules]; newM[mIndex].topics[tIndex].assessment.questions.push({ text: "", options: ["", "", "", ""], correctOptionIndex: 0 }); setModules(newM); }} className="text-[11px] text-emerald-400 font-bold uppercase">+ Next Question</button>
+                                <button onClick={() => { const newM = [...modules]; newM[mIndex].topics[tIndex].assessment.questions.push({ text: "", options: ["", "", "", ""], correctOptionIndex: 0 }); setModules(newM); }} className="text-[11px] text-blue-600 font-bold uppercase">+ Next Question</button>
                               </div>
                             )}
 
                             {topic.assignment && (
-                              <div className="mt-4 p-4 border border-amber-500/20 bg-amber-950/20 rounded-lg space-y-4">
+                              <div className="mt-4 p-4 border border-blue-100 bg-blue-50/80 rounded-lg space-y-4">
                                 <div className="flex justify-between items-center">
                                   <input 
-                                    className="bg-transparent text-sm font-semibold text-amber-400 focus:outline-none flex-1"
+                                    className="bg-transparent text-sm font-semibold text-[#2563EB] focus:outline-none flex-1"
                                     value={topic.assignment.title}
                                     onChange={(e) => { const newM = [...modules]; newM[mIndex].topics[tIndex].assignment.title = e.target.value; setModules(newM); }}
                                     placeholder="Assignment Title"
@@ -302,7 +302,7 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
                                 <textarea
                                   value={topic.assignment.description}
                                   onChange={(e) => { const newM = [...modules]; newM[mIndex].topics[tIndex].assignment.description = e.target.value; setModules(newM); }}
-                                  className="w-full bg-[#0A0A0A] border border-white/5 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-amber-500"
+                                  className="w-full bg-white border border-slate-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
                                 />
                               </div>
                             )}
@@ -315,7 +315,7 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
                           newM[mIndex].topics.push({ id: Date.now().toString() + Math.random(), title: "", content: "" });
                           setModules(newM);
                         }}
-                        className="text-sm font-medium text-emerald-400 mt-4"
+                        className="text-sm font-medium text-blue-600 mt-4"
                       >
                         + Add Topic
                       </button>
@@ -325,7 +325,7 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
               </StaggerWrapper>
             )}
             <div className="pt-6 relative z-10">
-              <button onClick={() => setActiveTab("settings")} className="bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium transition-colors">
+              <button onClick={() => setActiveTab("settings")} className="bg-[#2563EB] hover:bg-[#1d4ed8] text-white px-6 py-2.5 rounded-lg text-sm font-medium transition-colors">
                 Continue
               </button>
             </div>
@@ -335,11 +335,11 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
         {activeTab === "settings" && (
           <div className="space-y-6 max-w-2xl text-left">
             <div>
-              <label className="block text-sm font-medium text-neutral-300 mb-2">Status</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Status</label>
               <select 
                 value={formData.status}
                 onChange={(e) => setFormData({...formData, status: e.target.value})}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-emerald-500"
+                className="w-full bg-white/5 border border-slate-200 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-blue-500"
               >
                  <option value="draft">Draft (Private)</option>
                  <option value="published">Published (Public)</option>
@@ -349,7 +349,7 @@ export default function CourseEditPage({ params }: { params: Promise<{ id: strin
               <button 
                 onClick={handleUpdateCourse}
                 disabled={saving}
-                className="flex items-center justify-center w-full bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-3 rounded-lg text-sm font-medium shadow-[0_0_20px_rgba(16,185,129,0.2)]"
+                className="flex items-center justify-center w-full bg-[#2563EB] hover:bg-[#1d4ed8] text-white px-6 py-3 rounded-lg text-sm font-medium shadow-lg shadow-blue-600/20"
               >
                 {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : "Save Changes"}
               </button>

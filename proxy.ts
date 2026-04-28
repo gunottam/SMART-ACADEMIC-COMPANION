@@ -3,28 +3,36 @@ import { NextResponse } from "next/server";
 
 export default withAuth(
   function middleware(req) {
+    const { pathname } = req.nextUrl;
     const token = req.nextauth.token;
-    const path = req.nextUrl.pathname;
+    const role = (token?.role as string) || "student";
 
-    if (!token) {
-      return NextResponse.redirect(new URL("/login", req.url));
+    if (pathname === "/dashboard") {
+      return NextResponse.redirect(
+        new URL(role === "admin" ? "/dashboard/admin" : `/dashboard/${role}`, req.url)
+      );
     }
 
-    const role = (token.role as string) || "student";
-
-    // Dynamic role-based routing
-    if (path === "/portal" || path === "/dashboard") {
+    if (pathname === "/portal" && role !== "admin") {
       return NextResponse.redirect(new URL(`/dashboard/${role}`, req.url));
     }
 
-    // Role authorization for specific sub-routes
-    if (path.startsWith("/dashboard/admin") && role !== "admin") {
+    if (pathname.startsWith("/dashboard/admin") && role !== "admin") {
       return NextResponse.redirect(new URL(`/dashboard/${role}`, req.url));
     }
-    if (path.startsWith("/dashboard/teacher") && role !== "teacher" && role !== "admin") {
+    if (
+      pathname.startsWith("/dashboard/teacher") &&
+      role !== "teacher" &&
+      role !== "admin"
+    ) {
       return NextResponse.redirect(new URL(`/dashboard/${role}`, req.url));
     }
-    if (path.startsWith("/dashboard/student") && role !== "student" && role !== "admin") {
+    if (
+      pathname.startsWith("/dashboard/student") &&
+      role !== "student" &&
+      role !== "admin" &&
+      role !== "teacher"
+    ) {
       return NextResponse.redirect(new URL(`/dashboard/${role}`, req.url));
     }
 
@@ -32,20 +40,7 @@ export default withAuth(
   },
   {
     callbacks: {
-      authorized: ({ token }) => {
-        if (!token) return false;
-        
-        const email = token.email as string;
-        const ADMIN_EMAILS = ["gunottammaini@gmail.com"]; 
-        const isAdmin = ADMIN_EMAILS.includes(email) || token.role === "admin";
-
-        // Enforce university domain strictness at middleware level
-        if (!email?.endsWith("@geu.ac.in") && !isAdmin) {
-          return false;
-        }
-
-        return true;
-      },
+      authorized: ({ token }) => !!token,
     },
     pages: {
       signIn: "/login",
@@ -54,6 +49,5 @@ export default withAuth(
 );
 
 export const config = {
-  // Protect central paths
   matcher: ["/dashboard/:path*", "/portal"],
 };

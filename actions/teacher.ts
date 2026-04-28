@@ -7,335 +7,428 @@ import Topic from "@/models/Topic";
 import Assessment from "@/models/Assessment";
 import Assignment from "@/models/Assignment";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/authOptions";
 import { revalidatePath } from "next/cache";
 import UserProgress from "@/models/UserProgress";
-import User from "@/models/User";
+import { getTeacherDoubts } from "@/actions/doubts";
+import { isMockDataMode } from "@/lib/config";
+import {
+  MOCK_TEACHER_DASHBOARD,
+  MOCK_TEACHER_DOUBTS,
+  MOCK_TEACHER_ROSTER,
+} from "@/lib/mock-data";
 
-async function verifyTeacher() {
+async function requireInstructor() {
   const session = await getServerSession(authOptions);
-  
-  // Grant access to both teachers and system admins
-  if (!session || ((session.user as any).role !== "admin" && (session.user as any).role !== "teacher")) {
-    throw new Error("Unauthorized access. Instructor privileges required.");
+  if (
+    !session?.user?.id ||
+    (session.user.role !== "admin" && session.user.role !== "teacher")
+  ) {
+    throw new Error("Instructor access required.");
   }
-  
   return session;
 }
 
-export async function createCourse(data: { 
-  title: string; 
-  description: string; 
-  tags: string[]; 
+type ModuleInput = {
+  _id?: string;
+  title: string;
+  description?: string;
+  topics: TopicInput[];
+};
+type TopicInput = {
+  _id?: string;
+  title: string;
+  content: string;
+  assessment?: {
+    _id?: string;
+    title?: string;
+    passingScore?: number;
+    questions: Array<{
+      text: string;
+      options: string[];
+      correctOptionIndex: number;
+    }>;
+  };
+  assignment?: {
+    _id?: string;
+    title: string;
+    description?: string;
+    maxScore?: number;
+    dueDate?: Date | string | null;
+  };
+};
+
+export async function createCourse(data: {
+  title: string;
+  description: string;
+  tags: string[];
   status: string;
-  modules: { title: string; description: string; topics: { title: string; content: string; assessment?: any }[] }[];
+  modules: ModuleInput[];
 }) {
   try {
-    const session = await verifyTeacher();
+    const session = await requireInstructor();
     await dbConnect();
 
     const newCourse = await Course.create({
       title: data.title,
       description: data.description,
       tags: data.tags,
-      instructorId: (session.user as any).id,
+      instructorId: session.user.id,
       status: data.status,
     });
-    
-    // Create Modules and Topics deeply
-    if (data.modules && data.modules.length > 0) {
-      for (let i = 0; i < data.modules.length; i++) {
-        const modData = data.modules[i];
-        
-        // Skip entirely empty modules
-        if (!modData.title?.trim() && modData.topics.length === 0) continue;
 
-        const newModule = await Module.create({
+    if (Array.isArray(data.modules)) {
+      for (let i = 0; i < data.modules.length; i++) {
+        const mod = data.modules[i];
+        if (!mod.title?.trim() && (mod.topics || []).length === 0) continue;
+
+        const moduleDoc = await Module.create({
           courseId: newCourse._id,
-          title: modData.title?.trim() || "Untitled Module",
-          description: modData.description || "",
-          order: i
+          title: mod.title?.trim() || "Untitled Module",
+          description: mod.description || "",
+          order: i,
         });
 
-        if (modData.topics && modData.topics.length > 0) {
-          // Filter out topics that act as accidental empty UI ghost states
-          const validTopics = modData.topics.filter(t => t.title?.trim() || t.content?.trim());
-          
-          const topicsToInsert = validTopics.map((t, tIndex) => ({
-            moduleId: newModule._id,
+        const validTopics = (mod.topics || []).filter(
+          (t) => t.title?.trim() || t.content?.trim()
+        );
+        if (validTopics.length === 0) continue;
+
+        const insertedTopics = await Topic.insertMany(
+          validTopics.map((t, idx) => ({
+            moduleId: moduleDoc._id,
             title: t.title?.trim() || "Untitled Topic",
             content: t.content?.trim() || "No content provided yet.",
-            order: tIndex
-          }));
-          
-          if (topicsToInsert.length > 0) {
-            const insertedTopics = await Topic.insertMany(topicsToInsert);
-            
-            // Handle Assessments bound to valid topics
-            const assessmentsToInsert: any[] = [];
-            validTopics.forEach((t, i) => {
-              if (t.assessment && t.assessment.questions && t.assessment.questions.length > 0) {
-                // Filter out ghost questions
-                const validQs = t.assessment.questions.filter((q: any) => q.text?.trim() && q.options[0]?.trim());
-                if (validQs.length > 0) {
-                  assessmentsToInsert.push({
-                    topicId: insertedTopics[i]._id,
-                    title: t.assessment.title?.trim() || "Topic Quiz",
-                    questions: validQs.map((q: any) => ({
-                      text: q.text?.trim() || "Untitled Question",
-                      options: q.options.map((o: string) => o?.trim() || "Empty Option"),
-                      correctOptionIndex: q.correctOptionIndex || 0
-                    })),
-                    passingScore: 70
-                  });
-                }
-              }
-            });
-            
-            if (assessmentsToInsert.length > 0) {
-              await Assessment.insertMany(assessmentsToInsert);
-            }
+            order: idx,
+          }))
+        );
 
-            // Handle Assignments bound to valid topics
-            const assignmentsToInsert: any[] = [];
-            validTopics.forEach((t: any, i: number) => {
-              if (t.assignment && t.assignment.title?.trim()) {
-                assignmentsToInsert.push({
-                  courseId: newCourse._id,
-                  moduleId: newModule._id,
-                  topicId: insertedTopics[i]._id,
-                  title: t.assignment.title.trim(),
-                  description: t.assignment.description?.trim() || "No instructions provided.",
-                  maxScore: t.assignment.maxScore || 100,
-                  dueDate: t.assignment.dueDate || null,
-                });
-              }
-            });
+        const assessmentsToInsert = validTopics
+          .map((t, idx) => {
+            if (!t.assessment?.questions?.length) return null;
+            const qs = t.assessment.questions.filter(
+              (q) => q.text?.trim() && q.options?.[0]?.trim()
+            );
+            if (!qs.length) return null;
+            return {
+              topicId: insertedTopics[idx]._id,
+              title: t.assessment.title?.trim() || "Topic Quiz",
+              questions: qs.map((q) => ({
+                text: q.text.trim(),
+                options: q.options.map((o) => o?.trim() || "Empty Option"),
+                correctOptionIndex: q.correctOptionIndex || 0,
+              })),
+              passingScore: t.assessment.passingScore || 70,
+            };
+          })
+          .filter(Boolean);
+        if (assessmentsToInsert.length) {
+          await Assessment.insertMany(assessmentsToInsert);
+        }
 
-            if (assignmentsToInsert.length > 0) {
-              await Assignment.insertMany(assignmentsToInsert);
-            }
-          }
+        const assignmentsToInsert = validTopics
+          .map((t, idx) => {
+            if (!t.assignment?.title?.trim()) return null;
+            return {
+              courseId: newCourse._id,
+              moduleId: moduleDoc._id,
+              topicId: insertedTopics[idx]._id,
+              title: t.assignment.title.trim(),
+              description:
+                t.assignment.description?.trim() || "No instructions provided.",
+              maxScore: t.assignment.maxScore || 100,
+              dueDate: t.assignment.dueDate || null,
+            };
+          })
+          .filter(Boolean);
+        if (assignmentsToInsert.length) {
+          await Assignment.insertMany(assignmentsToInsert);
         }
       }
     }
 
     revalidatePath("/dashboard/teacher/courses");
-    return { success: true, courseId: newCourse._id.toString() };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+    return { success: true as const, courseId: newCourse._id.toString() };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to create course",
+    };
   }
 }
 
 export async function getTeacherCourses() {
   try {
-    const session = await verifyTeacher();
+    const session = await requireInstructor();
     await dbConnect();
 
-    // Fetch courses owned by this instructor
-    const courses = await Course.find({ instructorId: (session.user as any).id }).sort({ createdAt: -1 });
-    
-    // Convert Mongoose documents to plain JS objects to successfully pass the Server/Client boundary
-    return { success: true, courses: JSON.parse(JSON.stringify(courses)) };
-  } catch (error: any) {
-    return { success: false, error: error.message, courses: [] };
+    const courses = await Course.find({ instructorId: session.user.id })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return {
+      success: true as const,
+      courses: JSON.parse(JSON.stringify(courses)),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to load courses",
+      courses: [] as unknown[],
+    };
   }
 }
 
 export async function getCourseForEdit(courseId: string) {
   try {
-    const session = await verifyTeacher();
+    const session = await requireInstructor();
     await dbConnect();
 
     const course = await Course.findById(courseId);
-    if (!course || course.instructorId.toString() !== (session.user as any).id) {
-      throw new Error("Unauthorized");
+    if (!course) throw new Error("Course not found");
+
+    if (
+      session.user.role !== "admin" &&
+      course.instructorId.toString() !== session.user.id
+    ) {
+      throw new Error("You do not own this course.");
     }
 
-    const modules = await Module.find({ courseId }).sort({ order: 1 });
-    const moduleIds = modules.map(m => m._id);
-    const topics = await Topic.find({ moduleId: { $in: moduleIds } }).sort({ order: 1 });
-    const topicIds = topics.map(t => t._id);
-    
-    const assessments = await Assessment.find({ topicId: { $in: topicIds } });
-    const assignments = await Assignment.find({ topicId: { $in: topicIds } });
+    const modules = await Module.find({ courseId }).sort({ order: 1 }).lean();
+    const moduleIds = modules.map((m) => m._id);
+    const topics = await Topic.find({ moduleId: { $in: moduleIds } })
+      .sort({ order: 1 })
+      .lean();
+    const topicIds = topics.map((t) => t._id);
+    const [assessments, assignments] = await Promise.all([
+      Assessment.find({ topicId: { $in: topicIds } }).lean(),
+      Assignment.find({ topicId: { $in: topicIds } }).lean(),
+    ]);
 
-    const curriculum = modules.map(m => {
-      return {
-        ...m.toObject(),
-        id: m._id.toString(), // critical for UI key mapping
-        topics: topics.filter(t => t.moduleId.toString() === m._id.toString()).map(t => {
-          const tObj: any = t.toObject();
-          tObj.id = tObj._id.toString();
-          
-          const assessment = assessments.find(a => a.topicId.toString() === tObj._id.toString());
-          if (assessment) {
-            tObj.assessment = assessment.toObject();
-            tObj.assessment.id = tObj.assessment._id.toString();
-          }
-          
-          const assignment = assignments.find(a => a.topicId?.toString() === tObj._id.toString());
-          if (assignment) {
-            tObj.assignment = assignment.toObject();
-            tObj.assignment.id = tObj.assignment._id.toString();
-          }
-          return tObj;
-        })
-      };
-    });
+    const curriculum = modules.map((m) => ({
+      ...m,
+      id: m._id.toString(),
+      topics: topics
+        .filter((t) => t.moduleId.toString() === m._id.toString())
+        .map((t) => {
+          const assessment = assessments.find(
+            (a) => a.topicId.toString() === t._id.toString()
+          );
+          const assignment = assignments.find(
+            (a) => a.topicId?.toString() === t._id.toString()
+          );
+          return {
+            ...t,
+            id: t._id.toString(),
+            ...(assessment
+              ? { assessment: { ...assessment, id: assessment._id.toString() } }
+              : {}),
+            ...(assignment
+              ? { assignment: { ...assignment, id: assignment._id.toString() } }
+              : {}),
+          };
+        }),
+    }));
 
-    return { 
-      success: true, 
+    return {
+      success: true as const,
       course: JSON.parse(JSON.stringify(course)),
-      curriculum: JSON.parse(JSON.stringify(curriculum))
+      curriculum: JSON.parse(JSON.stringify(curriculum)),
     };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to load course",
+    };
   }
 }
 
-export async function updateCourseWithCurriculum(courseId: string, data: {
-  title: string; description: string; tags: string[]; status: string; modules: any[];
-}) {
+export async function updateCourseWithCurriculum(
+  courseId: string,
+  data: {
+    title: string;
+    description: string;
+    tags: string[];
+    status: string;
+    modules: ModuleInput[];
+  }
+) {
   try {
-    const session = await verifyTeacher();
+    const session = await requireInstructor();
     await dbConnect();
 
     const course = await Course.findById(courseId);
-    if (!course || course.instructorId.toString() !== (session.user as any).id) {
-      throw new Error("Unauthorized or course not found.");
+    if (!course) throw new Error("Course not found");
+    if (
+      session.user.role !== "admin" &&
+      course.instructorId.toString() !== session.user.id
+    ) {
+      throw new Error("You do not own this course.");
     }
 
-    // Standard Course update
     course.title = data.title;
     course.description = data.description;
     course.tags = data.tags;
-    course.status = data.status as any;
+    course.status = data.status as typeof course.status;
     await course.save();
 
-    // The robust upsert + delete tree loop
-    const incomingModuleIds = data.modules.filter(m => m._id).map(m => m._id.toString());
+    const incomingModuleIds = data.modules
+      .filter((m) => m._id)
+      .map((m) => m._id as string);
     const existingModules = await Module.find({ courseId });
 
     for (const exMod of existingModules) {
       if (!incomingModuleIds.includes(exMod._id.toString())) {
-        await Module.findByIdAndDelete(exMod._id);
         const topicsToDelete = await Topic.find({ moduleId: exMod._id });
-        const topicIds = topicsToDelete.map(t => t._id);
-        await Topic.deleteMany({ moduleId: exMod._id });
+        const topicIds = topicsToDelete.map((t) => t._id);
         await Assessment.deleteMany({ topicId: { $in: topicIds } });
         await Assignment.deleteMany({ topicId: { $in: topicIds } });
+        await Topic.deleteMany({ moduleId: exMod._id });
+        await Module.findByIdAndDelete(exMod._id);
       }
     }
 
     for (let i = 0; i < data.modules.length; i++) {
-      const modData = data.modules[i];
-      if (!modData.title?.trim() && modData.topics.length === 0) continue;
+      const mod = data.modules[i];
+      if (!mod.title?.trim() && (mod.topics || []).length === 0) continue;
 
-      let modDoc;
-      if (modData._id && modData._id.length === 24) {
-        modDoc = await Module.findByIdAndUpdate(modData._id, {
-          title: modData.title.trim() || "Untitled Module",
-          description: modData.description || "",
-          order: i
-        }, { new: true });
-      } else {
-        modDoc = await Module.create({ courseId, title: modData.title.trim() || "Untitled Module", description: modData.description || "", order: i });
-      }
+      const moduleDoc =
+        mod._id && mod._id.length === 24
+          ? await Module.findByIdAndUpdate(
+              mod._id,
+              {
+                title: mod.title?.trim() || "Untitled Module",
+                description: mod.description || "",
+                order: i,
+              },
+              { new: true }
+            )
+          : await Module.create({
+              courseId,
+              title: mod.title?.trim() || "Untitled Module",
+              description: mod.description || "",
+              order: i,
+            });
 
-      if (!modDoc) continue;
+      if (!moduleDoc) continue;
 
-      const incomingTopicIds = modData.topics.filter((t:any) => t._id && t._id.length === 24).map((t:any) => t._id.toString());
-      const existingTopics = await Topic.find({ moduleId: modDoc._id });
-      
+      const incomingTopicIds = (mod.topics || [])
+        .filter((t) => t._id && t._id.length === 24)
+        .map((t) => t._id as string);
+      const existingTopics = await Topic.find({ moduleId: moduleDoc._id });
+
       for (const exTop of existingTopics) {
         if (!incomingTopicIds.includes(exTop._id.toString())) {
-          await Topic.findByIdAndDelete(exTop._id);
           await Assessment.deleteMany({ topicId: exTop._id });
           await Assignment.deleteMany({ topicId: exTop._id });
+          await Topic.findByIdAndDelete(exTop._id);
         }
       }
 
-      for (let tIndex = 0; tIndex < modData.topics.length; tIndex++) {
-        const topData = modData.topics[tIndex];
-        if (!topData.title?.trim() && !topData.content?.trim()) continue;
+      for (let tIdx = 0; tIdx < (mod.topics || []).length; tIdx++) {
+        const t = mod.topics[tIdx];
+        if (!t.title?.trim() && !t.content?.trim()) continue;
 
-        let topDoc;
-        if (topData._id && topData._id.length === 24) {
-          topDoc = await Topic.findByIdAndUpdate(topData._id, {
-            title: topData.title.trim() || "Untitled Topic",
-            content: topData.content.trim() || "No content provided.",
-            order: tIndex
-          }, { new: true });
-        } else {
-          topDoc = await Topic.create({ moduleId: modDoc._id, title: topData.title.trim() || "Untitled Topic", content: topData.content.trim() || "No content provided.", order: tIndex });
-        }
+        const topicDoc =
+          t._id && t._id.length === 24
+            ? await Topic.findByIdAndUpdate(
+                t._id,
+                {
+                  title: t.title?.trim() || "Untitled Topic",
+                  content: t.content?.trim() || "No content provided.",
+                  order: tIdx,
+                },
+                { new: true }
+              )
+            : await Topic.create({
+                moduleId: moduleDoc._id,
+                title: t.title?.trim() || "Untitled Topic",
+                content: t.content?.trim() || "No content provided.",
+                order: tIdx,
+              });
 
-        if (!topDoc) continue;
+        if (!topicDoc) continue;
 
-        // Secure upsert Assessment
-        if (topData.assessment && topData.assessment.questions && topData.assessment.questions.length > 0) {
-          const validQs = topData.assessment.questions.filter((q: any) => q.text?.trim() && q.options[0]?.trim());
-          if (validQs.length > 0) {
-            const mappedQs = validQs.map((q: any) => ({
+        if (t.assessment?.questions?.length) {
+          const qs = t.assessment.questions.filter(
+            (q) => q.text?.trim() && q.options?.[0]?.trim()
+          );
+          if (qs.length) {
+            const mapped = qs.map((q) => ({
               text: q.text.trim(),
-              options: q.options.map((o: string) => o?.trim() || "Empty Option"),
-              correctOptionIndex: q.correctOptionIndex || 0
+              options: q.options.map((o) => o?.trim() || "Empty Option"),
+              correctOptionIndex: q.correctOptionIndex || 0,
             }));
-
-            if (topData.assessment._id && topData.assessment._id.length === 24) {
-              await Assessment.findByIdAndUpdate(topData.assessment._id, { title: topData.assessment.title?.trim() || "Topic Quiz", questions: mappedQs });
+            if (t.assessment._id && t.assessment._id.length === 24) {
+              await Assessment.findByIdAndUpdate(t.assessment._id, {
+                title: t.assessment.title?.trim() || "Topic Quiz",
+                questions: mapped,
+                passingScore: t.assessment.passingScore || 70,
+              });
             } else {
-              await Assessment.deleteMany({ topicId: topDoc._id });
-              await Assessment.create({ topicId: topDoc._id, title: topData.assessment.title?.trim() || "Topic Quiz", questions: mappedQs, passingScore: 70 });
+              await Assessment.deleteMany({ topicId: topicDoc._id });
+              await Assessment.create({
+                topicId: topicDoc._id,
+                title: t.assessment.title?.trim() || "Topic Quiz",
+                questions: mapped,
+                passingScore: t.assessment.passingScore || 70,
+              });
             }
           }
         } else {
-          await Assessment.deleteMany({ topicId: topDoc._id });
+          await Assessment.deleteMany({ topicId: topicDoc._id });
         }
 
-        // Secure upsert Assignment
-        if (topData.assignment && topData.assignment.title?.trim()) {
-           if (topData.assignment._id && topData.assignment._id.length === 24) {
-             await Assignment.findByIdAndUpdate(topData.assignment._id, {
-               title: topData.assignment.title.trim(),
-               description: topData.assignment.description?.trim() || "No instructions provided.",
-               maxScore: topData.assignment.maxScore || 100,
-               dueDate: topData.assignment.dueDate || null,
-             });
-           } else {
-             await Assignment.deleteMany({ topicId: topDoc._id });
-             await Assignment.create({ 
-               courseId, 
-               moduleId: modDoc._id, 
-               topicId: topDoc._id, 
-               title: topData.assignment.title.trim(), 
-               description: topData.assignment.description?.trim() || "No instructions provided.", 
-               maxScore: topData.assignment.maxScore || 100,
-               dueDate: topData.assignment.dueDate || null
-             });
-           }
+        if (t.assignment?.title?.trim()) {
+          if (t.assignment._id && t.assignment._id.length === 24) {
+            await Assignment.findByIdAndUpdate(t.assignment._id, {
+              title: t.assignment.title.trim(),
+              description:
+                t.assignment.description?.trim() || "No instructions provided.",
+              maxScore: t.assignment.maxScore || 100,
+              dueDate: t.assignment.dueDate || null,
+            });
+          } else {
+            await Assignment.deleteMany({ topicId: topicDoc._id });
+            await Assignment.create({
+              courseId,
+              moduleId: moduleDoc._id,
+              topicId: topicDoc._id,
+              title: t.assignment.title.trim(),
+              description:
+                t.assignment.description?.trim() || "No instructions provided.",
+              maxScore: t.assignment.maxScore || 100,
+              dueDate: t.assignment.dueDate || null,
+            });
+          }
         } else {
-           await Assignment.deleteMany({ topicId: topDoc._id });
+          await Assignment.deleteMany({ topicId: topicDoc._id });
         }
       }
     }
 
     revalidatePath("/dashboard/teacher/courses");
-    return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+    revalidatePath(`/dashboard/teacher/courses/${courseId}/edit`);
+    return { success: true as const };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to update course",
+    };
   }
 }
 
 export async function getTeacherAnalytics() {
   try {
-    const session = await verifyTeacher();
+    const session = await requireInstructor();
     await dbConnect();
 
-    // Limit analytics only to the courses taught by this instructor
-    const courses = await Course.find({ instructorId: (session.user as any).id });
-    const courseIds = courses.map(c => c._id);
+    const courseQuery =
+      session.user.role === "admin"
+        ? {}
+        : { instructorId: session.user.id };
+    const courses = await Course.find(courseQuery).select("_id").lean();
+    const courseIds = courses.map((c) => c._id);
 
     const avgScores = await UserProgress.aggregate([
       { $match: { courseId: { $in: courseIds } } },
@@ -343,58 +436,56 @@ export async function getTeacherAnalytics() {
         $addFields: {
           studentAvgScore: {
             $cond: {
-              if: { $gt: [{ $size: { $ifNull: ["$assessmentAttempts", []] } }, 0] },
+              if: {
+                $gt: [{ $size: { $ifNull: ["$assessmentAttempts", []] } }, 0],
+              },
               then: { $avg: "$assessmentAttempts.score" },
-              else: null
-            }
-          }
-        }
+              else: null,
+            },
+          },
+        },
       },
       {
         $group: {
           _id: "$courseId",
           computedAvgScore: { $avg: "$studentAvgScore" },
-          totalStudents: { $sum: 1 }
-        }
+          totalStudents: { $sum: 1 },
+        },
       },
       {
         $lookup: {
           from: "courses",
           localField: "_id",
           foreignField: "_id",
-          as: "course"
-        }
+          as: "course",
+        },
       },
       { $unwind: "$course" },
       {
         $project: {
           courseId: "$_id",
           courseName: "$course.title",
-          averageScore: { $round: [{ $ifNull: ["$computedAvgScore", 0] }, 1] },
+          averageScore: {
+            $round: [{ $ifNull: ["$computedAvgScore", 0] }, 1],
+          },
           totalStudents: 1,
-          _id: 0
-        }
+          _id: 0,
+        },
       },
-      { $match: { courseName: { $ne: "Data Structures" } } },
-      { $sort: { averageScore: -1 } }
+      { $sort: { averageScore: -1 } },
     ]);
 
     const weakTopics = await UserProgress.aggregate([
       { $match: { courseId: { $in: courseIds } } },
       { $unwind: "$weakAreas" },
-      {
-        $group: {
-          _id: "$weakAreas",
-          count: { $sum: 1 }
-        }
-      },
+      { $group: { _id: "$weakAreas", count: { $sum: 1 } } },
       {
         $lookup: {
           from: "topics",
           localField: "_id",
           foreignField: "_id",
-          as: "topicDetails"
-        }
+          as: "topicDetails",
+        },
       },
       { $unwind: { path: "$topicDetails", preserveNullAndEmptyArrays: true } },
       {
@@ -402,239 +493,242 @@ export async function getTeacherAnalytics() {
           topicId: "$_id",
           topicName: { $ifNull: ["$topicDetails.title", "Unknown Topic"] },
           frequency: "$count",
-          _id: 0
-        }
+          _id: 0,
+        },
       },
       { $sort: { frequency: -1 } },
-      { $limit: 10 }
+      { $limit: 10 },
     ]);
 
-    return { 
-      success: true, 
-      analytics: JSON.parse(JSON.stringify({ avgScores, weakTopics })) 
+    return {
+      success: true as const,
+      analytics: JSON.parse(JSON.stringify({ avgScores, weakTopics })),
     };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof Error ? error.message : "Failed to load analytics",
+    };
   }
 }
 
 export async function getStudentsForTeacher() {
   try {
-    const session = await verifyTeacher();
+    const session = await requireInstructor();
+    if (isMockDataMode()) {
+      return { success: true as const, roster: MOCK_TEACHER_ROSTER };
+    }
     await dbConnect();
 
-    const instructorId = (session.user as any).id;
-
-    // Strict Tenant-level security
-    const courses = await Course.find({ instructorId }).select('_id title');
-    const courseIds = courses.map(c => c._id);
-    const courseMap = courses.reduce((acc, c: any) => {
-      acc[c._id.toString()] = c.title;
-      return acc;
-    }, {} as Record<string, string>);
+    const courseQuery =
+      session.user.role === "admin"
+        ? {}
+        : { instructorId: session.user.id };
+    const courses = await Course.find(courseQuery).select("_id title").lean();
+    const courseIds = courses.map((c) => c._id);
+    const courseMap = new Map(courses.map((c) => [c._id.toString(), c.title]));
 
     const progresses = await UserProgress.find({ courseId: { $in: courseIds } })
-      .populate('userId', 'name email')
-      .populate('weakAreas', 'title')
-      .lean() as any[];
+      .populate("userId", "name email")
+      .populate("weakAreas", "title")
+      .lean();
 
-    // Structure the data sequentially for the Glassmorphism UI
-    const roster: any[] = [];
-    
-    progresses.forEach((p) => {
-      if (!p.userId) return; // Prevent dangling records from crashing the backend array
-      
-      let avgScore = 0;
-      if (p.assessmentAttempts && p.assessmentAttempts.length > 0) {
-        const total = p.assessmentAttempts.reduce((sum: number, a: any) => sum + a.score, 0);
-        avgScore = Math.round(total / p.assessmentAttempts.length);
-      }
-
-      roster.push({
-        id: p._id.toString(),
-        studentId: p.userId._id.toString(),
-        studentName: p.userId.name || "Unknown",
-        studentEmail: p.userId.email || "No Email",
-        courseName: courseMap[p.courseId.toString()] || "Unknown Course",
-        completionPercentage: p.progress || 0,
-        averageScore: avgScore,
-        weakAreas: p.weakAreas ? p.weakAreas.map((w: any) => w.title) : []
+    const roster = progresses
+      .filter((p) => p.userId)
+      .map((p) => {
+        const attempts = p.assessmentAttempts || [];
+        const avgScore = attempts.length
+          ? Math.round(
+              attempts.reduce((sum, a) => sum + a.score, 0) / attempts.length
+            )
+          : 0;
+        const u = p.userId as unknown as {
+          _id: unknown;
+          name?: string;
+          email?: string;
+        };
+        const weak = (p.weakAreas || []) as Array<{ title?: string }>;
+        return {
+          id: p._id.toString(),
+          studentId: String(u._id),
+          studentName: u.name || "Unknown",
+          studentEmail: u.email || "No Email",
+          courseName: courseMap.get(p.courseId.toString()) || "Unknown Course",
+          completionPercentage: p.progress || 0,
+          averageScore: avgScore,
+          weakAreas: weak
+            .map((w) => w.title)
+            .filter((v): v is string => Boolean(v)),
+        };
       });
-    });
 
-    return { success: true, roster: JSON.parse(JSON.stringify(roster)) };
-  } catch (error: any) {
-    return { success: false, error: error.message };
-  }
-}
-
-export async function getTrackedStudentProgress(courseTitle: string) {
-  try {
-    const session = await verifyTeacher();
-    await dbConnect();
-
-    const teacherId = (session.user as any).id;
-
-    // Find the course
-    const course = await Course.findOne({ title: courseTitle, instructorId: teacherId }).sort({ createdAt: -1 });
-    if (!course) {
-      return { success: false, error: "Course not found" };
-    }
-
-    // Identify exact Mock Student to ensure tracking alignment
-    const mockStudent = await User.findOne({ email: "student@example.com", role: "student" });
-    if (!mockStudent) {
-      return { success: false, error: "Mock student not found." };
-    }
-
-    // Find UserProgress for Mock Student specifically
-    const progressDoc = await UserProgress.findOne({ courseId: course._id, userId: mockStudent._id })
-      .populate("userId", "name email");
-
-    if (!progressDoc) {
-      return { success: false, error: "No student enrolled in this course yet." };
-    }
-
-    const courseModules = await Module.find({ courseId: course._id });
-    const moduleIds = courseModules.map((m: any) => m._id);
-    const totalTopicsInCourse = await Topic.countDocuments({ moduleId: { $in: moduleIds } });
-
-    let calculatedProgress = 0;
-    if (totalTopicsInCourse > 0) {
-      calculatedProgress = Math.min(100, Math.round((progressDoc.completedTopics.length / totalTopicsInCourse) * 100));
-    } else {
-      calculatedProgress = 100; // If no topics exist, it's virtually 100%. Or remain 0, but technically structurally complete. Wait, 0 or 100? Let's use 100 as the student action does.
-    }
-
-    console.log(`[TEACHER DASHBOARD] Progress Calculated: ${calculatedProgress}% for UserProgress ObjectId: ${progressDoc._id}`);
-
-    return { 
-      success: true, 
-      data: JSON.parse(JSON.stringify({
-        courseId: course._id,
-        courseName: course.title,
-        studentName: (progressDoc.userId as any)?.name || "Unknown Student",
-        progress: calculatedProgress,
-      }))
+    return { success: true as const, roster };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to load roster",
+      roster: [] as unknown[],
     };
-  } catch (error: any) {
-    console.error("Track progress error:", error);
-    return { success: false, error: error.message };
   }
 }
 
 export async function addStandaloneAssessment(data: {
   courseId: string;
   title: string;
-  questions: any[];
+  questions: Array<{
+    text: string;
+    options: string[];
+    correctOptionIndex: number;
+  }>;
   passingScore: number;
 }) {
   try {
-    const session = await verifyTeacher();
+    const session = await requireInstructor();
     await dbConnect();
-    
+
     const course = await Course.findById(data.courseId);
-    if (!course || (session.user as any).role !== "admin" && course.instructorId.toString() !== (session.user as any).id) {
-       throw new Error("Unauthorized to modify this course.");
+    if (!course) throw new Error("Course not found");
+    if (
+      session.user.role !== "admin" &&
+      course.instructorId.toString() !== session.user.id
+    ) {
+      throw new Error("You do not own this course.");
     }
-    
-    // Create a generic assessments module if it does not already exist
-    let moduleDoc = await Module.findOne({ courseId: data.courseId, title: "Additional Assessments" });
+
+    let moduleDoc = await Module.findOne({
+      courseId: data.courseId,
+      title: "Additional Assessments",
+    });
     if (!moduleDoc) {
-       moduleDoc = await Module.create({
-         courseId: data.courseId,
-         title: "Additional Assessments",
-         description: "Standalone tests and quizzes",
-         order: 999
-       });
+      moduleDoc = await Module.create({
+        courseId: data.courseId,
+        title: "Additional Assessments",
+        description: "Standalone tests and quizzes",
+        order: 999,
+      });
     }
-    
-    // Create the Topic object to hold the assessment
+
     const topicCount = await Topic.countDocuments({ moduleId: moduleDoc._id });
     const topicDoc = await Topic.create({
       moduleId: moduleDoc._id,
       title: data.title,
       content: "Please complete the assessment below.",
-      order: topicCount
+      order: topicCount,
     });
-    
-    // Create Assessment
-    const mappedQs = data.questions.filter((q: any) => q.text?.trim() && q.options[0]?.trim()).map((q: any) => ({
-      text: q.text?.trim() || "Untitled Question",
-      options: q.options.map((o: string) => o?.trim() || "Empty Option"),
-      correctOptionIndex: q.correctOptionIndex || 0
-    }));
-    
+
+    const qs = data.questions
+      .filter((q) => q.text?.trim() && q.options?.[0]?.trim())
+      .map((q) => ({
+        text: q.text.trim(),
+        options: q.options.map((o) => o?.trim() || "Empty Option"),
+        correctOptionIndex: q.correctOptionIndex || 0,
+      }));
+    if (!qs.length) throw new Error("At least one question is required.");
+
     const assessment = await Assessment.create({
       topicId: topicDoc._id,
       title: data.title,
-      questions: mappedQs,
-      passingScore: data.passingScore || 70
+      questions: qs,
+      passingScore: data.passingScore || 70,
     });
 
     revalidatePath("/dashboard/teacher/assessments");
     revalidatePath("/dashboard/student/courses");
-    
-    return { success: true, assessment: JSON.parse(JSON.stringify(assessment)) };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+
+    return {
+      success: true as const,
+      assessment: JSON.parse(JSON.stringify(assessment)),
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to create assessment",
+    };
   }
 }
 
 export async function getTeacherAssessmentResults() {
   try {
-    const session = await verifyTeacher();
+    const session = await requireInstructor();
     await dbConnect();
 
-    const isAdmin = (session.user as any).role === "admin";
-    const courseQuery = isAdmin ? {} : { instructorId: (session.user as any).id };
+    const isAdmin = session.user.role === "admin";
+    const courseQuery = isAdmin ? {} : { instructorId: session.user.id };
 
-    const courses = await Course.find(courseQuery).select("_id title").lean();
-    const courseIds = courses.map((c: any) => c._id);
+    const courses = await Course.find(courseQuery)
+      .select("_id title")
+      .lean();
+    const courseIds = courses.map((c) => c._id);
+    if (!courseIds.length)
+      return { success: true as const, assessments: [], attempts: [] };
 
-    if (courseIds.length === 0) {
-      return { success: true, assessments: [], attempts: [] };
-    }
+    const modules = await Module.find({ courseId: { $in: courseIds } })
+      .select("_id courseId title")
+      .lean();
+    const moduleIds = modules.map((m) => m._id);
 
-    const modules = await Module.find({ courseId: { $in: courseIds } }).select("_id courseId title").lean();
-    const moduleIds = modules.map((m: any) => m._id);
+    const topics = await Topic.find({ moduleId: { $in: moduleIds } })
+      .select("_id moduleId title")
+      .lean();
+    const topicIds = topics.map((t) => t._id);
 
-    const topics = await Topic.find({ moduleId: { $in: moduleIds } }).select("_id moduleId title").lean();
-    const topicIds = topics.map((t: any) => t._id);
+    const assessments = await Assessment.find({ topicId: { $in: topicIds } })
+      .sort({ createdAt: -1 })
+      .lean();
 
-    const assessments = await Assessment.find({ topicId: { $in: topicIds } }).sort({ createdAt: -1 }).lean();
-    const progresses = await UserProgress.find({ courseId: { $in: courseIds } }).populate("userId", "name email").lean() as any[];
+    const progresses = await UserProgress.find({
+      courseId: { $in: courseIds },
+    })
+      .populate("userId", "name email")
+      .lean();
 
-    const courseMap = new Map(courses.map((c: any) => [c._id.toString(), c.title]));
-    const moduleMap = new Map(modules.map((m: any) => [m._id.toString(), m]));
-    const topicMap = new Map(topics.map((t: any) => [t._id.toString(), t]));
-    const assessmentMap = new Map(assessments.map((a: any) => [a._id.toString(), a]));
+    const courseMap = new Map(courses.map((c) => [c._id.toString(), c.title]));
+    const moduleMap = new Map(modules.map((m) => [m._id.toString(), m]));
+    const topicMap = new Map(topics.map((t) => [t._id.toString(), t]));
+    const assessmentMap = new Map(
+      assessments.map((a) => [a._id.toString(), a])
+    );
 
-    const flattenedAssessments = assessments.map((a: any) => {
+    const flattenedAssessments = assessments.map((a) => {
       const topic = topicMap.get(a.topicId?.toString());
-      const module = topic ? moduleMap.get(topic.moduleId?.toString()) : null;
-      const courseTitle = module ? courseMap.get(module.courseId?.toString()) : "Unknown Course";
+      const moduleRow = topic ? moduleMap.get(topic.moduleId?.toString()) : null;
+      const courseTitle = moduleRow
+        ? courseMap.get(moduleRow.courseId?.toString())
+        : "Unknown Course";
       return {
         _id: a._id.toString(),
         title: a.title,
         passingScore: a.passingScore ?? 70,
         questionCount: Array.isArray(a.questions) ? a.questions.length : 0,
         topicTitle: topic?.title || "Unknown Topic",
-        moduleTitle: module?.title || "Unknown Module",
+        moduleTitle: moduleRow?.title || "Unknown Module",
         courseTitle,
-        createdAt: a.createdAt,
       };
     });
 
-    const attempts: any[] = [];
+    const attempts: Array<{
+      id: string;
+      assessmentTitle: string;
+      topicTitle: string;
+      courseTitle: string;
+      studentName: string;
+      studentEmail: string;
+      score: number;
+      timestamp: Date;
+    }> = [];
+
     for (const p of progresses) {
-      const student = p.userId;
-      const courseTitle = courseMap.get(p.courseId?.toString()) || "Unknown Course";
+      const student = p.userId as unknown as { name?: string; email?: string };
+      const courseTitle =
+        courseMap.get(p.courseId?.toString()) || "Unknown Course";
       for (const attempt of p.assessmentAttempts || []) {
         const assessment = assessmentMap.get(attempt.assessmentId?.toString());
         if (!assessment) continue;
         const topic = topicMap.get(assessment.topicId?.toString());
-
         attempts.push({
           id: `${p._id.toString()}-${attempt.assessmentId?.toString()}-${attempt.timestamp}`,
           assessmentTitle: assessment.title,
@@ -648,14 +742,93 @@ export async function getTeacherAssessmentResults() {
       }
     }
 
-    attempts.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    attempts.sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
 
     return {
-      success: true,
+      success: true as const,
       assessments: JSON.parse(JSON.stringify(flattenedAssessments)),
       attempts: JSON.parse(JSON.stringify(attempts)),
     };
-  } catch (error: any) {
-    return { success: false, error: error.message, assessments: [], attempts: [] };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "Failed to load results",
+      assessments: [] as unknown[],
+      attempts: [] as unknown[],
+    };
+  }
+}
+
+export async function getTeacherDashboardData() {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return { success: false as const, error: "Unauthorized" };
+    }
+    if (session.user.role !== "admin" && session.user.role !== "teacher") {
+      return { success: false as const, error: "Forbidden" };
+    }
+
+    if (isMockDataMode()) {
+      return {
+        success: true as const,
+        activeCount: MOCK_TEACHER_DASHBOARD.activeCount,
+        totalCourses: MOCK_TEACHER_DASHBOARD.totalCourses,
+        uniqueStudents: MOCK_TEACHER_DASHBOARD.uniqueStudents,
+        totalAssessmentsTaken: MOCK_TEACHER_DASHBOARD.totalAssessmentsTaken,
+        avgScores: MOCK_TEACHER_DASHBOARD.avgScores,
+        weakTopics: MOCK_TEACHER_DASHBOARD.weakTopics,
+        doubts: MOCK_TEACHER_DOUBTS,
+      };
+    }
+
+    await dbConnect();
+    const instructorId = session.user.id;
+    const isAdmin = session.user.role === "admin";
+    const courseQuery = isAdmin ? {} : { instructorId };
+    const courses = await Course.find(courseQuery).select("_id status").lean();
+    const activeCount = courses.filter((c) => c.status === "published").length;
+    const courseIds = courses.map((c) => c._id);
+    const progresses = courseIds.length
+      ? await UserProgress.find({ courseId: { $in: courseIds } })
+          .select("userId assessmentAttempts")
+          .lean()
+      : [];
+    const uniqueStudents = new Set(
+      progresses.map((p) => p.userId.toString())
+    ).size;
+    let totalAssessmentsTaken = 0;
+    for (const p of progresses) {
+      totalAssessmentsTaken += p.assessmentAttempts?.length || 0;
+    }
+
+    const analyticsRes = await getTeacherAnalytics();
+    const doubtsRes = await getTeacherDoubts();
+
+    return {
+      success: true as const,
+      activeCount,
+      totalCourses: courses.length,
+      uniqueStudents,
+      totalAssessmentsTaken,
+      avgScores: analyticsRes.success ? analyticsRes.analytics.avgScores : [],
+      weakTopics: analyticsRes.success ? analyticsRes.analytics.weakTopics : [],
+      doubts: doubtsRes.success ? doubtsRes.doubts : [],
+    };
+  } catch (error) {
+    return {
+      success: false as const,
+      error:
+        error instanceof Error ? error.message : "Failed to load dashboard",
+      activeCount: 0,
+      totalCourses: 0,
+      uniqueStudents: 0,
+      totalAssessmentsTaken: 0,
+      avgScores: [] as unknown[],
+      weakTopics: [] as unknown[],
+      doubts: [] as unknown[],
+    };
   }
 }
