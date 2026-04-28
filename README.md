@@ -161,7 +161,9 @@ erDiagram
 
 ## 👥 Team
 
-Built as a Full Stack PBL (Project-Based Learning) project.
+Gunottam Maini (Team Lead)
+Ananya Garg
+Prableen Kaur
 
 ---
 
